@@ -1,0 +1,96 @@
+# manor's web front. Run it with ./manor, which reads manor.env, finds the
+# Theseus host's Eyre port and sets the variables used here.
+#
+#   join.<base>      the trolley gate (/gate/) and the broker's /assign
+#   <moon>.<base>    the broker's /broker; everything else goes to the moon
+#                    through the host's /theseus/~<moon> route
+#
+# Public HTTPS listens on MANOR_HTTPS_PORT; the router forwards public 443 to
+# it. Certificates are fetched as visitors arrive, one per hostname, and only
+# for names the broker's /tls-ask approves: the join host and pool moons. So a
+# moon added to the pool needs no change here. Only 443 reaches this machine,
+# so the TLS-ALPN challenge is used, never HTTP.
+#
+# The same routes are served on this Mac at http://join.localhost:<local port>
+# for testing.
+{
+	admin {$MANOR_ADMIN:localhost:2020}
+	auto_https disable_redirects
+	https_port {$MANOR_HTTPS_PORT:8443}
+	# Eyre channels are long-lived streams; bound how long a reload waits.
+	grace_period 10s
+	servers {
+		protocols h1 h2
+		# The Host header must match the certificate's name, so a pool
+		# moon's certificate cannot carry requests for any other moon.
+		strict_sni_host on
+	}
+	on_demand_tls {
+		ask http://127.0.0.1:{$MANOR_BROKER_PORT:8091}/tls-ask
+	}
+}
+
+(eyre) {
+	reverse_proxy {$THESEUS_EYRE_UPSTREAM} {
+		header_up Host {$THESEUS_EYRE_HOST}
+		# Forward only while the upstream answers as the Theseus host: after
+		# a restart another ship may hold its old Eyre port.
+		health_uri /~/host
+		health_body "^{$THESEUS_SHIP}$"
+		health_interval 5s
+		health_timeout 2s
+	}
+}
+
+(broker) {
+	reverse_proxy 127.0.0.1:{$MANOR_BROKER_PORT:8091}
+}
+
+# The routes, for one join host (args[0]).
+(routes) {
+	@join host {args[0]}
+	handle @join {
+		handle_path /gate/* {
+			root * {$MANOR_HOME}/gate
+			file_server
+		}
+		handle /assign {
+			import broker
+		}
+		handle {
+			redir * /gate/ 302
+		}
+	}
+
+	# A moon's address starts with its name, e.g. ribmut-mogwyn-siglup-narwet.
+	@moon header_regexp moon Host ^(?P<ship>[a-z]{3,6}(?:-[a-z]{6})+)\.
+	handle @moon {
+		handle /broker {
+			import broker
+		}
+		handle {
+			rewrite * /theseus/~{re.moon.ship}{uri}
+			import eyre
+		}
+	}
+
+	handle {
+		respond 404
+	}
+}
+
+https:// {
+	tls {
+		on_demand
+		issuer acme {
+			dir {$MANOR_ACME_DIR:https://acme-v02.api.letsencrypt.org/directory}
+			disable_http_challenge
+		}
+	}
+	import routes join.{$MANOR_BASE}
+}
+
+http://:{$MANOR_LOCAL_PORT:8090} {
+	bind 127.0.0.1
+	import routes join.localhost
+}

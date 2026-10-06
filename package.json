@@ -1,0 +1,10 @@
+{
+  "name": "manor",
+  "private": true,
+  "description": "A public front door for Theseus moons: one link, a moon each, logged in.",
+  "type": "module",
+  "engines": {"node": ">=20"},
+  "scripts": {
+    "test": "node --test test/*.test.mjs"
+  }
+}

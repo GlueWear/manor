@@ -1,0 +1,6 @@
+# settings and secrets: moon codes, the host code, claims
+manor.env
+state/
+logs/
+node_modules/
+.DS_Store

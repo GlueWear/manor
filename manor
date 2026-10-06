@@ -1,0 +1,202 @@
+#!/usr/bin/env bash
+# manor: run the trolley gate, the broker and Caddy in front of a Theseus host.
+#
+#   ./manor check       settings, the host, the Caddy config and the pool
+#   ./manor start       start the broker and Caddy (in the background, logs/)
+#   ./manor stop
+#   ./manor restart     e.g. after the host restarts on another Eyre port
+#   ./manor status
+#   ./manor logs
+#   ./manor install     launchd agents: start at login, restart on failure
+#   ./manor uninstall
+#
+# Settings come from manor.env (copy manor.env.example).
+set -u
+MANOR_HOME="$(cd "$(dirname "$0")" && pwd)"
+export MANOR_HOME
+ENV_FILE="${MANOR_ENV:-$MANOR_HOME/manor.env}"
+LOGS="$MANOR_HOME/logs"
+AGENTS="$HOME/Library/LaunchAgents"
+GUI="gui/$(id -u)"
+BROKER_LABEL=io.gluewear.manor.broker
+CADDY_LABEL=io.gluewear.manor.caddy
+BROKER_MATCH="node $MANOR_HOME/broker.mjs"
+CADDY_MATCH="caddy run --config $MANOR_HOME/Caddyfile"
+export PATH="/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:$PATH"
+
+log() { printf 'manor: %s\n' "$*" >&2; }
+die() { log "error: $*"; exit 1; }
+
+load() {
+  [ -f "$ENV_FILE" ] || die "no $ENV_FILE; copy manor.env.example to manor.env and fill it in"
+  set -a
+  # shellcheck disable=SC1090
+  . "$ENV_FILE"
+  set +a
+  local v
+  for v in THESEUS_SHIP THESEUS_PIER MANOR_BASE; do
+    [ -n "${!v:-}" ] || die "set $v in $ENV_FILE"
+  done
+  mkdir -p "$LOGS"
+}
+
+# The host's public Eyre port, read fresh each time, and checked to answer as
+# THESEUS_SHIP. Never its loopback port: Eyre treats that as the ship's owner.
+find_host() {
+  local port who
+  port=$(awk '$2 == "insecure" && $3 == "public" { print $1; exit }' "$THESEUS_PIER/.http.ports" 2>/dev/null)
+  [ -n "$port" ] || die "no public Eyre port in $THESEUS_PIER/.http.ports; is $THESEUS_SHIP running?"
+  who=$(curl -s --max-time 5 "http://127.0.0.1:$port/~/host") || die "nothing answers on Eyre port $port"
+  [ "$who" = "$THESEUS_SHIP" ] || die "Eyre port $port answers as ${who:-nothing}, not $THESEUS_SHIP"
+  export MANOR_HOST_URL="http://127.0.0.1:$port"
+  export THESEUS_EYRE_UPSTREAM="127.0.0.1:$port" THESEUS_EYRE_HOST="localhost:$port"
+}
+
+running() { pgrep -f "$1" >/dev/null 2>&1; }
+installed() { [ -f "$AGENTS/$BROKER_LABEL.plist" ] || [ -f "$AGENTS/$CADDY_LABEL.plist" ]; }
+
+cmd_check() {
+  load
+  find_host
+  command -v node >/dev/null || die "node not found"
+  command -v caddy >/dev/null || die "caddy not found (brew install caddy)"
+  echo "host       $THESEUS_SHIP at $MANOR_HOST_URL"
+  echo "public     https://join.$MANOR_BASE/  (router: public 443 -> this Mac's ${MANOR_HTTPS_PORT:-8443})"
+  echo "local      http://join.localhost:${MANOR_LOCAL_PORT:-8090}/"
+  echo "landing    ${MANOR_LANDING:-/apps/noltbook/}"
+  if caddy validate --config "$MANOR_HOME/Caddyfile" --adapter caddyfile >/dev/null 2>&1; then
+    echo "caddy      config valid"
+  else
+    caddy validate --config "$MANOR_HOME/Caddyfile" --adapter caddyfile 2>&1 | tail -5
+    die "the Caddy config is not valid"
+  fi
+  local code="${MANOR_HOST_CODE_FILE:-$MANOR_HOME/state/host-code}"
+  if [ -n "${MANOR_HOST_CODE:-}" ]; then
+    echo "host code  from MANOR_HOST_CODE"
+  elif [ -s "$code" ]; then
+    [ "$(stat -f %Lp "$code")" = 600 ] || log "warning: $code should be private: chmod 600 $code"
+    echo "host code  $code"
+  else
+    echo "host code  MISSING: run +code in $THESEUS_SHIP's Dojo, save it to $code, chmod 600"
+  fi
+  echo
+  node "$MANOR_HOME/pool.mjs" list
+}
+
+cmd_start() {
+  if installed; then
+    launchctl kickstart "$GUI/$BROKER_LABEL"
+    launchctl kickstart "$GUI/$CADDY_LABEL"
+    cmd_status
+    return
+  fi
+  load
+  find_host
+  if running "$BROKER_MATCH"; then echo "broker  already running"; else
+    nohup node "$MANOR_HOME/broker.mjs" >>"$LOGS/broker.log" 2>&1 &
+    echo "broker  started (logs/broker.log)"
+  fi
+  if running "$CADDY_MATCH"; then echo "caddy   already running"; else
+    nohup caddy run --config "$MANOR_HOME/Caddyfile" --adapter caddyfile >>"$LOGS/caddy.log" 2>&1 &
+    echo "caddy   started (logs/caddy.log)"
+  fi
+}
+
+stop_processes() {
+  if pkill -f "$CADDY_MATCH"; then echo "caddy   stopped"; else echo "caddy   not running"; fi
+  if pkill -f "$BROKER_MATCH"; then echo "broker  stopped"; else echo "broker  not running"; fi
+}
+
+cmd_stop() {
+  installed && die "launchd keeps manor running; use ./manor uninstall to stop it for good"
+  stop_processes
+}
+
+cmd_restart() {
+  if installed; then
+    launchctl kickstart -k "$GUI/$BROKER_LABEL"
+    launchctl kickstart -k "$GUI/$CADDY_LABEL"
+    echo "restarted"
+    return
+  fi
+  stop_processes
+  sleep 1
+  cmd_start
+}
+
+cmd_status() {
+  if running "$BROKER_MATCH"; then echo "broker  running"; else echo "broker  stopped"; fi
+  if running "$CADDY_MATCH"; then echo "caddy   running"; else echo "caddy   stopped"; fi
+  if installed; then echo "launchd agents installed"; fi
+}
+
+cmd_logs() {
+  mkdir -p "$LOGS"
+  touch "$LOGS/broker.log" "$LOGS/caddy.log"
+  tail -n 40 -f "$LOGS/broker.log" "$LOGS/caddy.log"
+}
+
+# launchd's entry point: find the host's current port, then become the process.
+cmd_run() {
+  load
+  find_host
+  case "${1:-}" in
+    broker) exec node "$MANOR_HOME/broker.mjs" ;;
+    caddy) exec caddy run --config "$MANOR_HOME/Caddyfile" --adapter caddyfile ;;
+    *) die "usage: ./manor run broker|caddy" ;;
+  esac
+}
+
+write_plist() {  # <label> <broker|caddy>
+  cat >"$AGENTS/$1.plist" <<EOF
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0"><dict>
+  <key>Label</key><string>$1</string>
+  <key>ProgramArguments</key><array>
+    <string>/bin/bash</string><string>$MANOR_HOME/manor</string><string>run</string><string>$2</string>
+  </array>
+  <key>RunAtLoad</key><true/>
+  <key>KeepAlive</key><true/>
+  <key>ThrottleInterval</key><integer>10</integer>
+  <key>StandardOutPath</key><string>$LOGS/$2.log</string>
+  <key>StandardErrorPath</key><string>$LOGS/$2.log</string>
+</dict></plist>
+EOF
+}
+
+cmd_install() {
+  load
+  find_host   # fail here rather than in a restart loop
+  mkdir -p "$AGENTS"
+  launchctl bootout "$GUI/$BROKER_LABEL" 2>/dev/null
+  launchctl bootout "$GUI/$CADDY_LABEL" 2>/dev/null
+  stop_processes >/dev/null
+  write_plist "$BROKER_LABEL" broker
+  write_plist "$CADDY_LABEL" caddy
+  launchctl bootstrap "$GUI" "$AGENTS/$BROKER_LABEL.plist" || die "could not load $BROKER_LABEL"
+  launchctl bootstrap "$GUI" "$AGENTS/$CADDY_LABEL.plist" || die "could not load $CADDY_LABEL"
+  echo "installed: manor starts at login and restarts on failure (logs/)"
+}
+
+cmd_uninstall() {
+  local label
+  for label in "$BROKER_LABEL" "$CADDY_LABEL"; do
+    launchctl bootout "$GUI/$label" 2>/dev/null
+    rm -f "$AGENTS/$label.plist"
+    echo "removed $label"
+  done
+}
+
+case "${1:-status}" in
+  check) cmd_check ;;
+  start) cmd_start ;;
+  stop) cmd_stop ;;
+  restart) cmd_restart ;;
+  status) cmd_status ;;
+  logs) cmd_logs ;;
+  run) shift; cmd_run "$@" ;;
+  install) cmd_install ;;
+  uninstall) cmd_uninstall ;;
+  *) sed -n '2,13p' "$0" | sed 's/^# \{0,1\}//'; exit 1 ;;
+esac
