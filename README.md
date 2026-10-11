@@ -141,8 +141,7 @@ npm run build       # writes desk/web/manor.html
 `%manor` needs `%theseus` on the same ship, with the `%theseus-session` poke
 (Theseus at commit `876e2ef` or later).
 
-The tile icon is a placeholder; it is replaced before `%manor` is
-distributed.
+The tile icon is a temporary placeholder.
 
 ## License
 
