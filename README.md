@@ -3,182 +3,147 @@
 A public front door for [Theseus](https://github.com/GlueWear/theseus) moons.
 Share one link. A visitor passes a (silly) proof-of-human page, gets a moon of
 their own from a pool of running moons, and lands in it already logged in, at
-a page you choose, such as Noltbook. They never see the moon's `+code`.
+a page you choose, such as Glurff. They never see the moon's `+code`. After a
+demo you reset the used moons to a clean snapshot.
 
-After a demo you recycle the used moons: each is restored to a clean snapshot
-and goes back in the pool.
+Manor is an Urbit app, `%manor`, that sits next to `%theseus` on the same
+ship. The only thing outside Urbit is [Caddy](https://caddyserver.com), which
+gives each moon its own secure web address.
 
 ```
-https://join.<base>/gate/         the trolley page; "Pull the lever"
-  -> https://join.<base>/assign   the broker claims a free moon
-  -> https://<moon>.<base>/broker the broker logs in with the moon's +code
-                                  and sets only the moon's session cookie
-  -> https://<moon>.<base>/apps/noltbook/
+your ship
+├─ %theseus   moons, fleets, snapshots, restores, visitor sessions
+└─ %manor     the pool, who has which moon, the lever page, the admin page
+
+next to it, outside Urbit
+└─ Caddy      HTTPS for join.<address> and <moon>.<address>
 ```
 
-Moon pages travel `Caddy -> host Eyre /theseus/~<moon>/... -> the moon`, the
-same route the Theseus web gateway uses.
+## What a visitor sees
 
-## What's here
+```
+https://join.<address>/                the lever page; "Pull the lever"
+  -> join.<address>/assign             %manor claims a free, ready moon
+  -> <moon>.<address>/~manor/enter     %manor logs them in to the moon
+  -> <moon>.<address>/apps/glurff/     their moon
+```
 
-| File | What it does |
-| --- | --- |
-| `gate/` | The trolley page. "Pull the lever" goes to `/assign`. It checks nothing. |
-| `broker.mjs` | Hands out moons (`/assign`), logs visitors in (`/broker`), and tells Caddy which names may get certificates (`/tls-ask`). |
-| `pool.mjs` | Manages the pool: add moons, read their codes from the host, recycle after demos. |
-| `Caddyfile` | Public HTTPS for `join.<base>` and `<moon>.<base>`, plus the same routes on `http://join.localhost:8090` for testing. |
-| `manor` | Starts, stops and checks it all; installs launchd agents. |
-| `state/` | `pool.json` (moon codes), `claims.json`, `host-code`. Private, never in git. |
+A ticket in the link works once, for two minutes, so knowing a moon's address
+is not enough to get into someone else's. Only moons that Theseus says are
+ready go out: running, not paused or being restored, and every desk caught up
+with its source.
 
 ## Setting it up
 
-You need a Theseus host (a planet running `%theseus`), Node 20 or newer,
-Caddy 2.7 or newer (tested with 2.11), and a router that can forward a port to
-this machine.
+You need a planet running `%theseus`, Caddy 2.7 or newer, and a way in from
+the internet: a router that can forward a port to the machine running your
+ship, or a server with a public address. Ships hosted by a provider can't run
+Caddy next to them.
 
-1. **Settings.** `cp manor.env.example manor.env` and fill it in: the host
-   ship, its pier, and `MANOR_BASE`. With nip.io the base is your public IP
-   with dashes (`curl -s https://api.ipify.org`, then `203.0.113.7` becomes
-   `203-0-113-7.nip.io`).
+1. **Install `%manor`.** From this repo: create a desk and copy `desk/` into
+   it, then commit and install it.
 
-2. **The host's +code.** Run `+code` in the host's Dojo and save it:
-
-   ```sh
-   mkdir -p state && chmod 700 state
-   printf '%s\n' 'sampel-ticlyt-migfun-falmel' > state/host-code   # yours
-   chmod 600 state/host-code
+   ```
+   |new-desk %manor
+   |mount %manor
+   ```
+   Copy `desk/*` into the mounted `manor` folder, then:
+   ```
+   |commit %manor
+   |install our %manor
    ```
 
-   `pool.mjs` uses it to log into the host. It is full access to the host:
-   keep it private.
+2. **A fleet and its snapshot.** In Theseus, boot a fleet with the desks
+   visitors should have. Don't choose `%noltbook-data`: Noltbook makes its own,
+   and choosing it copies yours, with every file you uploaded. Wait until every
+   moon is ready, then take a fleet snapshot (the fleet's camera button).
 
-3. **The pool.** In the Theseus console:
-   - **Boot Fleet** with the moons you want, choosing the desks visitors
-     should have (e.g. `%noltbook`; Landscape comes with it). Wait until every
-     desk shows running.
-   - For each moon, open **Snapshots of ~moon**, take a snapshot named e.g.
-     `clean-1`, with "keep running" checked. Recycling restores it.
+3. **The Manor page** (its tile, or `/apps/manor`):
+   - **Connect a fleet:** choose the fleet and its snapshot.
+   - **Settings:** the public address, and the landing page, e.g.
+     `/apps/glurff/`. With nip.io the address is your public IP with dashes:
+     `curl -s https://api.ipify.org`, then `203.0.113.7` becomes
+     `203-0-113-7.nip.io`.
+   - **Front door:** choose the HTTPS port Caddy listens on, then download
+     the Caddyfile. It is made for your ship: its Eyre port, the address, and
+     only the routes Manor needs.
 
-   Then add each moon with its snapshot:
+4. **Caddy.** Install it once (`brew install caddy` on a Mac, your package
+   manager on Linux, caddyserver.com on Windows). Save the Caddyfile next to
+   it and run `caddy run --config Caddyfile --adapter caddyfile`. On a Mac,
+   from this repo, `./manor start` does it, and `./manor install` runs it at
+   login.
 
-   ```sh
-   node pool.mjs add ~moon-name --snapshot /clean-1
-   node pool.mjs list
-   ```
+5. **The router.** Forward public TCP 443 to that machine's HTTPS port.
+   Port 80 is not needed: certificates use the TLS-ALPN challenge.
 
-   **Or, for a whole fleet:** take one fleet snapshot (the fleet's camera
-   button). Theseus keeps it as one snapshot per moon in a set, so add every
-   member at once with the set as each moon's clean snapshot:
+Try it on that machine at `http://join.localhost:8090/`, then the public link
+from a phone on mobile data: home routers often can't reach their own public
+address from inside. Each name's first visit takes a few seconds while Caddy
+fetches its certificate.
 
-   ```sh
-   node pool.mjs add --fleet <fleet-name> --snapshot /<fleet-snapshot>
-   ```
+## Running demos
 
-   After a demo you can then reset only the moons that were used, or the
-   whole fleet (below).
+The Manor page shows every moon: free, link sent, in use since, resetting,
+catching up, or needing attention.
 
-4. **The router.** Forward public TCP **443** to this machine's
-   `MANOR_HTTPS_PORT` (8443). Port 80 is not needed.
+- **Reset used moons** after a demo: Theseus restores each one from the
+  snapshot with new keys, and it goes out again once it is ready.
+- **Reset all**, or reset, free or remove one moon.
+- **Change fleet** to switch to another fleet and snapshot.
+- **Names and pictures:** each moon shows its full `@p`, and its Noltbook
+  name and picture when it runs Noltbook. Click a Noltbook moon's name or
+  picture to change them: a name, a picture file (shrunk to 128 pixels and
+  uploaded into the moon through Theseus) or a picture address. A change
+  made anywhere, here, in Theseus or in Noltbook itself, shows on every open
+  page without a reload: Theseus pushes it. A reset brings back the
+  snapshot's name and picture.
 
-5. **Run it.**
+The page updates as things happen, with no refresh timer: `%manor` and
+Theseus tell it when something changes, such as a visitor pulling the lever,
+a reset finishing, or a name changing. It lists recent activity: who got
+which moon, resets, and anything that failed.
 
-   ```sh
-   ./manor check      # settings, host, Caddy config, pool
-   ./manor start      # or ./manor install to run under launchd
-   ```
+## How it is kept safe
 
-   Try it on this machine at <http://join.localhost:8090/>. Try the public
-   link from a phone on cellular: home routers often cannot reach their own
-   public address from inside. The first visit to each name takes a few
-   seconds while Caddy fetches its certificate.
+- **Only Manor and moons are public.** The Caddyfile forwards only
+  `/apps/manor/public/*` on the join address, `/~manor/enter` on a moon's
+  address, and the moon's own pages through Theseus. Your ship's login, apps
+  and scries are never reachable through it.
+- **Certificates only for pool names.** Caddy asks `%manor` before fetching
+  one: only the join address and pool moons get one, and each moon's
+  certificate carries requests for that moon only.
+- **Codes stay on the ship.** `%manor` never sees a moon's `+code`. To log a
+  visitor in, it asks `%theseus` for a session (`%theseus-session`), which
+  Theseus opens inside the moon. A reset ends every session made since the
+  snapshot.
+- **Moons can't see your login.** Theseus passes a moon only its own login
+  cookie, so a moon can't read or replace your ship's.
+- **Visitors own their moons** until you reset them. Give pool moons only the
+  desks you want visitors to have.
 
-## After a demo
+## Development
 
-```sh
-node pool.mjs list                        # who has what
-node pool.mjs recycle --claimed           # what would be recycled
-node pool.mjs recycle --claimed --execute
-```
-
-Recycling a moon:
-
-1. holds it back from `/assign`;
-2. restores its clean snapshot on the host;
-3. waits until Theseus has finished the restore and the moon is running;
-4. saves the moon's **new** `+code`. A restore gives the moon new keys, and
-   its code comes from its key, so the old code stops working;
-5. frees the moon.
-
-With a fleet snapshot set as each moon's clean snapshot, `recycle --claimed`
-resets only the moons that were handed out, each from its own snapshot in the
-set.
-
-**To restore every moon in a set at once**, used or not:
-
-```sh
-node pool.mjs recycle-fleet /fleet-snapshot            # what would be restored
-node pool.mjs recycle-fleet /fleet-snapshot --execute
-```
-
-This holds all of the snapshot's moons back from `/assign`, restores the
-snapshot, waits until every moon is running (it shows `n of 15 moons back`),
-saves each moon's new code and frees them. Every moon gets new keys, so the
-world's host has as many key changes to process.
-
-A moon whose recycle fails stays held back, shown as `recycle-error` with the
-reason in `node pool.mjs list`. Fix the cause, then recycle it again or
-`node pool.mjs release ~moon`.
-
-## How it behaves
-
-- **One moon per lever pull.** The first free moon in the pool that is ready
-  is claimed. When none are free, visitors see "All moons are taken right
-  now."
-- **Only ready moons.** At each pull the broker asks Theseus which moons are
-  running, not paused or being restored, and have every desk caught up with
-  its source. A moon Kiln is still downloading or merging for is busy on the
-  host, so it waits. When the free moons are all still settling, or the host
-  is too busy to answer within 10 seconds, visitors see "Moons are still
-  getting ready."
-- **One-time links.** `/assign` sends the visitor to their moon with a
-  ticket that works once, within two minutes. Knowing a moon's address is not
-  enough to log into a moon handed to someone else. A ticket nobody used frees
-  its moon again. A visitor who already has the moon's session cookie goes
-  straight in.
-- **Visitors own their moons.** The session they get is the moon's owner
-  session. Give pool moons only the desks you want visitors to have.
-- **Certificates only for pool names.** Caddy asks the broker before
-  fetching a certificate, so only `join.<base>` and pool moons get one, and
-  adding a moon to the pool needs no Caddy change. Caddy also requires the
-  Host header to match the certificate's name.
-- **Codes stay private.** Codes live only in `state/` (mode 600). Nothing
-  prints or logs them.
-
-## Operating
-
-| Task | Command |
+| Path | What |
 | --- | --- |
-| Status / logs | `./manor status`, `./manor logs` |
-| The host restarted (its Eyre port may have changed) | `./manor restart` |
-| Run at login, restart on failure | `./manor install` (remove with `./manor uninstall`) |
-| A moon's code is out of date (e.g. restored by hand in the console) | `node pool.mjs refresh ~moon` |
-| Take a moon out | `node pool.mjs remove ~moon` |
-| Trial certificates without rate limits | set `MANOR_ACME_DIR` to Let's Encrypt staging in `manor.env` |
-
-| Visitors see | Cause | Fix |
-| --- | --- | --- |
-| "All moons are taken right now." | Every moon is claimed | Recycle after the demo, or add moons |
-| "Moons are still getting ready." | Free moons are still catching up, paused or restoring, or the host is too busy to answer | Wait; the console shows each moon's state. `./manor logs` says if the host didn't answer |
-| "Your moon is not ready yet." | The moon refused its saved code | `node pool.mjs refresh ~moon` |
-| A certificate error | Port 443 not forwarded, or a name outside the pool | Check the router; `node pool.mjs list` |
-| 502 on a moon page | The host is down or moved to another Eyre port | Start the host; `./manor restart` |
-
-## Tests
+| `desk/` | the `%manor` desk: `app/manor.hoon`, `sur/manor.hoon`, `mar/manor/action.hoon`, the lever page `web/gate.html`, and the built admin page `web/manor.html` |
+| `ui/` | the admin page (React), built into `desk/web/manor.html` |
+| `manor` | runs Caddy with `./Caddyfile` on macOS: start, stop, status, logs, launchd |
 
 ```sh
-npm test
+cd ui
+npm install
+npm test            # page logic, and the Caddyfile through caddy validate
+npm run test:e2e    # the page against a mock host
+npm run build       # writes desk/web/manor.html
 ```
 
-They run the broker and `pool.mjs` against a mock Theseus host: assigning,
-one-time links, logging in, certificate approval, adding moons, and
-recycling.
+`%manor` needs `%theseus` on the same ship, with the `%theseus-session` poke
+(Theseus at commit `876e2ef` or later).
+
+The tile icon is a placeholder; it is replaced before `%manor` is
+distributed.
+
+## License
+
+MIT

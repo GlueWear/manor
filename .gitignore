@@ -1,7 +1,11 @@
-# settings and secrets: moon codes, the host code, claims
-manor.env
-state/
+# this machine's front door: made by the Manor page, holds the public address
+Caddyfile
+Caddyfile.*
 logs/
 node_modules/
+ui/dist/
+ui/test-results/
 .DS_Store
 RUNBOOK.md
+# the tile icon: a placeholder photo we don't have the rights to publish
+desk/web/icon.png

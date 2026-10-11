@@ -62,8 +62,8 @@
   <main class="card">
     <div class="kicker">PROOF OF HUMAN</div>
     <div class="fig">
-      <img src="/gate/trolley.png" alt="A trolley on a track with a lever; one path loops forever, the other breaks away."
-           onerror="this.replaceWith(Object.assign(document.createElement('div'),{className:'missing',textContent:'[ save your trolley image to gate/trolley.png ]'}))" />
+      <img src="/trolley.png" alt="A trolley on a track with a lever; one path loops forever, the other breaks away."
+           onerror="this.replaceWith(Object.assign(document.createElement('div'),{className:'missing',textContent:'[ the trolley image is missing ]'}))" />
     </div>
     <p class="prompt">
       You control the lever that decides the trolley's future. <b>Do nothing</b>,
@@ -95,8 +95,8 @@
   function pullLever() {
     var n = document.getElementById('note');
     n.textContent = "History it is. Booting your moon…";
-    // hand off to the broker's assigner, which picks a free moon from the pool
-    // and sends you to that moon's own address, logged in.
+    // %manor picks a free, ready moon and sends you to its own address,
+    // where you are logged in.
     window.location.href = '/assign';
   }
 </script>

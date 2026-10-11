@@ -1,0 +1,10 @@
+:~
+  title+'Manor'
+  info+'Hand this ship\'s Theseus moons to visitors through a public link, and reset them after demos.'
+  color+0x36.4a5a
+  image+'/apps/manor/icon.png'
+  site+/apps/manor
+  version+[0 1 0]
+  website+'https://github.com/GlueWear/manor'
+  license+'MIT'
+==
