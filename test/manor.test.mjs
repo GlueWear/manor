@@ -19,8 +19,8 @@ const BASE = 'manor.test';
 const freePort = () => new Promise(r => { const s = net.createServer().listen(0, '127.0.0.1', () => { const {port} = s.address(); s.close(() => r(port)); }); });
 
 // One test world: a mock host, a state directory and settings pointing at both.
-async function world({pool = {}, claims = {}, snapshots} = {}) {
-  const host = await startHost({ship: '~siglup-narwet', code: 'host-code', moons: {[A]: 'code-a', [B]: 'code-b'},
+async function world({pool = {}, claims = {}, snapshots, fleets = [], failing = []} = {}) {
+  const host = await startHost({ship: '~siglup-narwet', code: 'host-code', moons: {[A]: 'code-a', [B]: 'code-b'}, fleets, failing,
     snapshots: snapshots || [{path: '/clean-a', ships: [A], compatible: true}, {path: '/clean-b', ships: [B], compatible: true}]});
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'manor-'));
   const env = {...process.env, MANOR_HOST_URL: host.url, MANOR_BASE: BASE, MANOR_LANDING: '/apps/noltbook/',
@@ -105,6 +105,43 @@ test('the lever hands out each pool moon once, logged in, and then runs out', as
   } finally { broker.stop(); w.done(); }
 });
 
+test('the lever skips a moon still catching up, and says so when only those are free', async () => {
+  const w = await world({pool: {[A]: {code: 'code-a'}, [B]: {code: 'code-b'}}});
+  w.host.state.moons[A].desks = [{desk: 'base', stage: 'running'}, {desk: 'glurff', stage: 'catching-up'}];
+  w.host.state.moons[B].desks = [{desk: 'base', stage: 'running'}, {desk: 'glurff', stage: 'running'}];
+  const broker = await startBroker(w.env);
+  try {
+    const first = await get(broker.port, '/assign', {host: `join.${BASE}`});
+    assert.equal(new URL(first.headers.location).hostname, `${B.slice(1)}.${BASE}`, 'the ready moon, not the first');
+    const wait = await get(broker.port, '/assign', {host: `join.${BASE}`});
+    assert.equal(wait.status, 503);
+    assert.match(wait.body, /still getting ready/);
+    assert.equal(w.claims$()[A], undefined, 'a moon catching up is not claimed');
+    // once Kiln is done, it goes out
+    w.host.state.moons[A].desks[1].stage = 'running';
+    const later = await get(broker.port, '/assign', {host: `join.${BASE}`});
+    assert.equal(new URL(later.headers.location).hostname, `${A.slice(1)}.${BASE}`);
+    // paused or restoring moons wait too
+    w.host.state.moons[A].paused = true;
+    fs.writeFileSync(w.env.MANOR_CLAIMS_FILE, '{}');
+    w.host.state.moons[B].recovery = {stage: 'registering', attempts: 0, reason: null};
+    assert.match((await get(broker.port, '/assign', {host: `join.${BASE}`})).body, /still getting ready/);
+  } finally { broker.stop(); w.done(); }
+});
+
+test('a host that cannot say which moons are ready hands out none', async () => {
+  const w = await world({pool: {[A]: {code: 'code-a'}}});
+  const broker = await startBroker({...w.env, MANOR_HOST_CODE: 'wrong-code'});
+  try {
+    const res = await get(broker.port, '/assign', {host: `join.${BASE}`});
+    assert.equal(res.status, 503);
+    assert.match(res.body, /still getting ready/);
+    assert.equal(w.claims$()[A], undefined);
+    assert.match(broker.log(), /could not read which moons are ready/);
+    assert.ok(!broker.log().includes('wrong-code'), 'the host code stays out of the log');
+  } finally { broker.stop(); w.done(); }
+});
+
 test('a local visit stays on http and on the local port', async () => {
   const w = await world({pool: {[A]: {code: 'code-a'}}});
   const broker = await startBroker(w.env);
@@ -166,7 +203,7 @@ test('pool add reads codes from the host into a private file, and list never pri
     assert.ok(!/code-a|code-b/.test(list.out));
     assert.notEqual((await w.run('add', '~sampel-palnet')).code, 0, 'a moon the host does not have');
     const wrong = await w.run('add', B, '--snapshot', '/clean-a');
-    assert.match(wrong.out, /holds ~dozpen-dozpen-siglup-narwet, not just ~ribmut-mogwyn-siglup-narwet/);
+    assert.match(wrong.out, /has no snapshot of just ~ribmut-mogwyn-siglup-narwet/);
   } finally { w.done(); }
 });
 
@@ -194,9 +231,81 @@ test('a failed recycle holds the moon back with the reason', async () => {
     const res = await w.run('recycle', A, '--execute');
     assert.notEqual(res.code, 0);
     assert.equal(w.claims$()[A].status, 'recycle-error');
-    assert.match(w.claims$()[A].error, /holds .* not just/);
+    assert.match(w.claims$()[A].error, /has no snapshot of just/);
     assert.match((await w.run('list')).out, /recycle-error/);
     await w.run('release', A);
+    assert.deepEqual(w.claims$(), {});
+  } finally { w.done(); }
+});
+
+const FLEET = '/fleet-clean';
+// A fleet snapshot as Theseus keeps it: one snapshot per moon, in one set.
+const fleetSnaps = [A, B].map(m => ({path: `${FLEET}/${m}`, set: FLEET, ships: [m], compatible: true}));
+const fleetWorld = opts => world({
+  pool: {[A]: {code: 'code-a', snapshot: null}, [B]: {code: 'code-b', snapshot: null}},
+  claims: {[A]: {at: 'x', entered: 'y'}},
+  snapshots: fleetSnaps,
+  ...opts,
+});
+
+test('add --fleet adds every booted member of a fleet', async () => {
+  const unbooted = '~mogwyn-ribmut-siglup-narwet';
+  const w = await world({fleets: [{name: 'guests', ships: [A, B, unbooted], desks: []}]});
+  try {
+    const res = await w.run('add', '--fleet', 'guests');
+    assert.equal(res.code, 0, res.out);
+    assert.match(res.out, new RegExp(`skipping 1 members not booted yet: ${unbooted}`));
+    assert.deepEqual(Object.keys(w.pool$()).sort(), [A, B].sort());
+    assert.equal(w.pool$()[B].code, 'code-b');
+    assert.notEqual((await w.run('add', '--fleet', 'nope')).code, 0);
+  } finally { w.done(); }
+});
+
+test('recycle-fleet restores the whole snapshot, then saves every new code and frees the moons', async () => {
+  const w = await fleetWorld();
+  try {
+    const dry = await w.run('recycle-fleet', FLEET);
+    assert.match(dry.out, /would restore \/fleet-clean: 2 moons, 2 of them in the pool/);
+    assert.equal(w.host.state.pokes.length, 0, 'a dry run sends nothing');
+
+    const res = await w.run('recycle-fleet', FLEET, '--execute');
+    assert.equal(res.code, 0, res.out);
+    assert.deepEqual(w.host.state.pokes.map(p => [p.app, p.mark, p.json]), [['theseus', 'theseus-ui', {restore: {path: FLEET}}]]);
+    for (const m of [A, B]) {
+      assert.equal(w.pool$()[m].code, w.host.state.moons[m].code);
+      assert.ok(!['code-a', 'code-b'].includes(w.pool$()[m].code));
+    }
+    assert.deepEqual(w.claims$(), {}, 'every moon is free again');
+    assert.match(res.out, /2 of 2 pool moons restored/);
+    assert.ok(!/code-a|code-b/.test(res.out) && !res.out.includes(w.pool$()[A].code), 'codes stay out of the output');
+  } finally { w.done(); }
+});
+
+test('recycle-fleet frees the moons that came back and holds back the one that did not', async () => {
+  const w = await fleetWorld({failing: [B]});
+  try {
+    const res = await w.run('recycle-fleet', FLEET, '--execute', '--timeout', '8');
+    assert.notEqual(res.code, 0);
+    assert.notEqual(w.pool$()[A].code, 'code-a');
+    assert.equal(w.claims$()[A], undefined, 'the healthy moon is free');
+    assert.equal(w.claims$()[B].status, 'recycle-error');
+    assert.match(w.claims$()[B].error, /Host Jael did not confirm/);
+    assert.match(res.out, /1 of 2 pool moons restored/);
+  } finally { w.done(); }
+});
+
+test('a fleet snapshot set recycles one moon on its own', async () => {
+  const w = await world({fleets: [{name: 'guests', ships: [A, B], desks: []}], snapshots: fleetSnaps});
+  try {
+    const added = await w.run('add', '--fleet', 'guests', '--snapshot', FLEET);
+    assert.equal(added.code, 0, added.out);
+    assert.equal(w.pool$()[A].snapshot, FLEET);
+    fs.writeFileSync(w.env.MANOR_CLAIMS_FILE, JSON.stringify({[A]: {at: 'x', entered: 'y'}}));
+    const res = await w.run('recycle', '--claimed', '--execute');
+    assert.equal(res.code, 0, res.out);
+    assert.deepEqual(w.host.state.pokes.map(p => [p.mark, p.json]), [['theseus-recycle', {who: A, path: FLEET}]]);
+    assert.notEqual(w.pool$()[A].code, 'code-a');
+    assert.equal(w.pool$()[B].code, 'code-b', 'the other moon is untouched');
     assert.deepEqual(w.claims$(), {});
   } finally { w.done(); }
 });

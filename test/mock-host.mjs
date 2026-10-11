@@ -4,9 +4,9 @@
 import http from 'node:http';
 import crypto from 'node:crypto';
 
-export async function startHost({ship = '~zod', code = 'host-code', moons = {}, snapshots = []} = {}) {
+export async function startHost({ship = '~zod', code = 'host-code', moons = {}, snapshots = [], fleets = [], failing = []} = {}) {
   const state = {
-    ship, code, snapshots, pokes: [],
+    ship, code, snapshots, fleets, failing, pokes: [],
     // moon -> {code, status, paused, recovery}
     moons: Object.fromEntries(Object.entries(moons).map(([m, c]) => [m, {code: c, status: 'healthy', paused: false, recovery: null}])),
     session: crypto.randomBytes(8).toString('hex'),
@@ -17,10 +17,15 @@ export async function startHost({ship = '~zod', code = 'host-code', moons = {}, 
   const body = req => new Promise(r => { let b = ''; req.on('data', c => { b += c; }); req.on('end', () => r(b)); });
 
   // A restore: registering, then restarting, then running with new keys.
+  // A moon in .failing stops at a failed recovery and stays paused.
   function restore(moon) {
     const m = state.moons[moon];
     m.recovery = {stage: 'registering', attempts: 0, reason: null};
     m.paused = true;
+    if (state.failing.includes(moon)) {
+      setTimeout(() => { m.recovery = {stage: 'failed', attempts: 30, reason: 'Host Jael did not confirm the new continuity era.'}; }, 1200);
+      return;
+    }
     setTimeout(() => { m.recovery = {stage: 'restarting', attempts: 0, reason: null}; }, 1200);
     setTimeout(() => { m.recovery = null; m.paused = false; m.code = crypto.randomBytes(6).toString('hex'); }, 2400);
   }
@@ -54,8 +59,9 @@ export async function startHost({ship = '~zod', code = 'host-code', moons = {}, 
     if (p === '/~/scry/theseus/ui.json') {
       return json(res, {
         host: ship,
-        moons: Object.entries(state.moons).map(([s, m]) => ({ship: s, status: m.status, paused: m.paused, recovery: m.recovery})),
+        moons: Object.entries(state.moons).map(([s, m]) => ({ship: s, status: m.status, paused: m.paused, recovery: m.recovery, desks: m.desks || []})),
         snapshots: state.snapshots,
+        fleets: state.fleets,
       });
     }
     const web = p.match(/^\/~\/scry\/theseus\/web\/(~[a-z-]+)\.json$/);
@@ -73,10 +79,18 @@ export async function startHost({ship = '~zod', code = 'host-code', moons = {}, 
         for (const a of actions) {
           state.pokes.push(a);
           let err = null;
+          // Mirrors %theseus: a recycle names the moon's own snapshot, or a
+          // set holding one; a restore names one snapshot, or a whole set.
           if (a.mark === 'theseus-recycle') {
-            const snap = state.snapshots.find(s => s.path === a.json.path);
+            const snap = state.snapshots.find(s => s.path === a.json.path) || state.snapshots.find(s => s.path === `${a.json.path}/${a.json.who}`);
             if (!snap || snap.ships.join() !== a.json.who) err = 'theseus-recycle-snapshot-mismatch';
             else restore(a.json.who);
+          }
+          if (a.mark === 'theseus-ui' && a.json.restore) {
+            const p = a.json.restore.path;
+            const hit = state.snapshots.some(s => s.path === p) ? state.snapshots.filter(s => s.path === p) : state.snapshots.filter(s => s.set === p);
+            if (!hit.length) err = 'theseus-restore-missing';
+            else hit.flatMap(s => s.ships).forEach(restore);
           }
           queue.push(err ? {id: a.id, response: 'poke', err} : {id: a.id, response: 'poke', ok: 'ok'});
         }

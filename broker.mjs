@@ -10,14 +10,16 @@
 //   /tls-ask?domain=        Caddy asks before fetching a certificate; only the
 //                           join host and pool moons get one
 //
-// /assign hands out a one-time ticket that /broker requires, so knowing a
-// moon's address is not enough to log into a moon given to someone else. A
-// ticket nobody used within two minutes frees its moon again.
+// /assign hands out only moons Theseus says are ready (running, and every
+// desk caught up with its source), each with a one-time ticket that /broker
+// requires, so knowing a moon's address is not enough to log into a moon
+// given to someone else. A ticket nobody used within two minutes frees its
+// moon again.
 //
 // The pool and claims files are read on every request, so changes made with
 // pool.mjs (a new moon, a code refreshed by a recycle) apply at once.
 import http from 'node:http';
-import {settings, ship, label, readJson, updateJson, newTicket, digest, moonLogin} from './lib/manor.mjs';
+import {settings, ship, label, readJson, updateJson, newTicket, digest, moonLogin, Host, hostCode, moonReady} from './lib/manor.mjs';
 
 const cfg = settings();
 const TICKET_MS = 2 * 60_000;
@@ -56,16 +58,42 @@ function allowCertificate(domain) {
 // A claim whose ticket ran out unused never reached its moon.
 const free = (claim, now) => !claim || (Boolean(claim.expires) && claim.expires < now && !claim.entered);
 
-function assign(req, res, host) {
+// The moons Theseus says can take a visitor now (see moonReady), read at each
+// lever pull with a session on the host. Null when the host can't say in
+// time: it is too busy for its moons to be ready either.
+const READY_MS = 10_000;
+let session = null;
+async function readyMoons() {
+  for (let attempt = 0; attempt < 2; attempt++) {
+    try {
+      session ||= await new Host(cfg.hostUrl, hostCode(cfg)).login();
+      const ui = await session.scry('theseus/ui', READY_MS);
+      return new Set(ui.moons.filter(moonReady).map(moon => moon.ship));
+    } catch (error) {
+      // An expired session is refused: log in again, once.
+      if (!attempt && session && /HTTP 40[13]/.test(error.message)) { session = null; continue; }
+      console.error('[broker] could not read which moons are ready:', error.message);
+      return null;
+    }
+  }
+}
+
+async function assign(req, res, host) {
   if (!host.startsWith('join.')) return send(res, 404, 'not found');
+  const ready = await readyMoons();
+  if (!ready) return page(res, 503, 'Moons are still getting ready.', 'Try again in a minute.');
   const pool = readJson(cfg.poolFile);
   const ticket = newTicket();
   let moon = null;
+  let waiting = false;
   updateJson(cfg.claimsFile, claims => {
     const now = Date.now();
-    moon = Object.keys(pool).find(m => pool[m]?.code && free(claims[m], now)) || null;
+    const open = Object.keys(pool).filter(m => pool[m]?.code && free(claims[m], now));
+    moon = open.find(m => ready.has(m)) || null;
+    waiting = open.length > 0;
     if (moon) claims[moon] = {at: new Date(now).toISOString(), ticket: digest(ticket), expires: now + TICKET_MS};
   });
+  if (!moon && waiting) return page(res, 503, 'Moons are still getting ready.', 'Try again in a minute.');
   if (!moon) return page(res, 503, 'All moons are taken right now.', 'Check back soon.');
   // The moon's address sits beside join's: join.<base> -> <moon>.<base>.
   const to = `${scheme(req)}://${label(moon)}.${host.slice('join.'.length)}/broker?ticket=${ticket}`;

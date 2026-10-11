@@ -66,6 +66,17 @@ this machine.
    node pool.mjs list
    ```
 
+   **Or, for a whole fleet:** take one fleet snapshot (the fleet's camera
+   button). Theseus keeps it as one snapshot per moon in a set, so add every
+   member at once with the set as each moon's clean snapshot:
+
+   ```sh
+   node pool.mjs add --fleet <fleet-name> --snapshot /<fleet-snapshot>
+   ```
+
+   After a demo you can then reset only the moons that were used, or the
+   whole fleet (below).
+
 4. **The router.** Forward public TCP **443** to this machine's
    `MANOR_HTTPS_PORT` (8443). Port 80 is not needed.
 
@@ -98,14 +109,37 @@ Recycling a moon:
    its code comes from its key, so the old code stops working;
 5. frees the moon.
 
+With a fleet snapshot set as each moon's clean snapshot, `recycle --claimed`
+resets only the moons that were handed out, each from its own snapshot in the
+set.
+
+**To restore every moon in a set at once**, used or not:
+
+```sh
+node pool.mjs recycle-fleet /fleet-snapshot            # what would be restored
+node pool.mjs recycle-fleet /fleet-snapshot --execute
+```
+
+This holds all of the snapshot's moons back from `/assign`, restores the
+snapshot, waits until every moon is running (it shows `n of 15 moons back`),
+saves each moon's new code and frees them. Every moon gets new keys, so the
+world's host has as many key changes to process.
+
 A moon whose recycle fails stays held back, shown as `recycle-error` with the
 reason in `node pool.mjs list`. Fix the cause, then recycle it again or
 `node pool.mjs release ~moon`.
 
 ## How it behaves
 
-- **One moon per lever pull.** The first free moon in the pool is claimed.
-  When none are free, visitors see "All moons are taken right now."
+- **One moon per lever pull.** The first free moon in the pool that is ready
+  is claimed. When none are free, visitors see "All moons are taken right
+  now."
+- **Only ready moons.** At each pull the broker asks Theseus which moons are
+  running, not paused or being restored, and have every desk caught up with
+  its source. A moon Kiln is still downloading or merging for is busy on the
+  host, so it waits. When the free moons are all still settling, or the host
+  is too busy to answer within 10 seconds, visitors see "Moons are still
+  getting ready."
 - **One-time links.** `/assign` sends the visitor to their moon with a
   ticket that works once, within two minutes. Knowing a moon's address is not
   enough to log into a moon handed to someone else. A ticket nobody used frees
@@ -134,6 +168,7 @@ reason in `node pool.mjs list`. Fix the cause, then recycle it again or
 | Visitors see | Cause | Fix |
 | --- | --- | --- |
 | "All moons are taken right now." | Every moon is claimed | Recycle after the demo, or add moons |
+| "Moons are still getting ready." | Free moons are still catching up, paused or restoring, or the host is too busy to answer | Wait; the console shows each moon's state. `./manor logs` says if the host didn't answer |
 | "Your moon is not ready yet." | The moon refused its saved code | `node pool.mjs refresh ~moon` |
 | A certificate error | Port 443 not forwarded, or a name outside the pool | Check the router; `node pool.mjs list` |
 | 502 on a moon page | The host is down or moved to another Eyre port | Start the host; `./manor restart` |

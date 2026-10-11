@@ -3,17 +3,22 @@
 //
 //   node pool.mjs list                              the pool and who has what
 //   node pool.mjs add ~moon... [--snapshot /name]   add moons, reading their codes
+//   node pool.mjs add --fleet <name> [--snapshot /set]  add every booted member of a fleet
 //   node pool.mjs snapshot ~moon /name              the clean snapshot to recycle to
 //   node pool.mjs refresh [~moon...]                re-read codes from the host
 //   node pool.mjs release ~moon...                  free moons without restoring
 //   node pool.mjs remove ~moon...                   take moons out of the pool
 //   node pool.mjs recycle (~moon... | --claimed) [--execute]
+//   node pool.mjs recycle-fleet /snapshot [--execute]
 //
-// recycle restores each moon to its clean snapshot, waits until the restore
-// has finished and the moon is running, saves the moon's new +code (a restore
-// gives the moon new keys, and the code comes from its key), then frees it.
-// Without --execute it only says what it would do. A moon whose recycle fails
-// stays held back ("recycle-error") until you recycle or release it.
+// Theseus keeps one snapshot per moon. A fleet snapshot is a set of them,
+// /<set>/<~moon>, so a moon's clean snapshot can be its own or a set's.
+// recycle restores just the named moons; recycle-fleet restores a whole set
+// (or a pre-set snapshot holding many moons) at once. Either waits until the restore has finished and
+// the moons are running, saves each moon's new +code (a restore gives a moon
+// new keys, and the code comes from its key), then frees them. Without
+// --execute they only say what they would do. A moon whose recycle fails stays
+// held back ("recycle-error") until you recycle or release it.
 //
 // Talks to the host with its +code: state/host-code or MANOR_HOST_CODE.
 // Codes are never printed.
@@ -32,6 +37,7 @@ try {
     case 'release': release(); break;
     case 'remove': remove(); break;
     case 'recycle': await recycle(); break;
+    case 'recycle-fleet': await recycleFleet(); break;
     default: usage();
   }
 } catch (error) {
@@ -61,12 +67,20 @@ function list() {
 }
 
 async function add() {
-  need(moons.length, 'name at least one moon');
+  need(moons.length || flags.fleet, 'name moons, or use --fleet <name>');
   const host = await connect();
   const ui = await host.scry('theseus/ui');
-  if (flags.snapshot) need(moons.length === 1, '--snapshot applies to one moon at a time');
+  const targets = [...moons];
+  if (flags.fleet) {
+    const group = (ui.fleets || []).find(f => f.name === flags.fleet);
+    need(group, `no fleet named ${flags.fleet} on ${host.name}`);
+    const booted = new Set(ui.moons.map(m => m.ship));
+    const waiting = group.ships.filter(m => !booted.has(m));
+    if (waiting.length) console.log(`skipping ${waiting.length} members not booted yet: ${waiting.join(', ')}`);
+    for (const m of group.ships) if (booted.has(m) && !targets.includes(m)) targets.push(m);
+  }
   const pool = readJson(cfg.poolFile);
-  for (const moon of moons) {
+  for (const moon of targets) {
     need(ui.moons.some(m => m.ship === moon), `${moon} is not a moon on ${host.name}`);
     if (flags.snapshot) checkSnapshot(ui, moon, flags.snapshot);
     pool[moon] = {...pool[moon], code: await codeOf(host, moon), snapshot: flags.snapshot || pool[moon]?.snapshot || null};
@@ -145,37 +159,113 @@ async function recycleOne(host, moon) {
   // Any claim keeps /assign away from the moon while it is restored.
   updateJson(cfg.claimsFile, c => { c[moon] = {status: 'recycling', at: new Date().toISOString(), snapshot}; });
   await host.poke('theseus', 'theseus-recycle', {who: moon, path: snapshot});
-  await waitUntilRestored(host, moon, Number(flags.timeout || 120) * 1000);
+  const problem = (await waitUntilRestored(host, [moon], Number(flags.timeout || 120) * 1000))[moon];
+  if (problem) throw new Error(problem);
+  await saveNewCode(host, moon, before);
+}
+
+async function recycleFleet() {
+  const path = flags._[0];
+  need(path, 'usage: node pool.mjs recycle-fleet /snapshot [--execute]');
+  const pool = readJson(cfg.poolFile);
+  const host = await connect();
+  const snap = findSnapshot(await host.scry('theseus/ui'), path);
+  need(snap, `no snapshot ${path} on the host`);
+  need(snap.compatible !== false, `snapshot ${path} does not fit the host's current Theseus`);
+  const targets = snap.ships.filter(m => pool[m]);
+  need(targets.length, `snapshot ${path} holds none of the pool's moons`);
+  const outside = Object.keys(pool).filter(m => !snap.ships.includes(m));
+  const extra = snap.ships.filter(m => !pool[m]);
+  console.log(`${flags.execute ? 'restoring' : 'would restore'} ${path}: ${snap.ships.length} moons, ${targets.length} of them in the pool`);
+  if (outside.length) console.log(`not in this snapshot, so left as they are: ${outside.join(', ')}`);
+  if (extra.length) console.log(`restored too, though not in the pool: ${extra.join(', ')}`);
+  if (!flags.execute) return console.log('dry run: add --execute to restore and free these moons');
+
+  const before = Object.fromEntries(targets.map(m => [m, pool[m].code]));
+  const at = new Date().toISOString();
+  // Hold every moon back from /assign until it is restored and has its code.
+  updateJson(cfg.claimsFile, c => { for (const m of targets) c[m] = {status: 'recycling', at, snapshot: path}; });
+  try {
+    await host.poke('theseus', 'theseus-ui', {restore: {path}});
+  } catch (error) {
+    holdBack(targets, error.message);
+    throw error;
+  }
+  const problems = await waitUntilRestored(host, snap.ships, Number(flags.timeout || 300) * 1000);
+  let failed = 0;
+  for (const moon of targets) {
+    try {
+      if (problems[moon]) throw new Error(problems[moon]);
+      await saveNewCode(host, moon, before[moon]);
+    } catch (error) {
+      failed++;
+      holdBack([moon], error.message);
+      console.error(`${moon}: FAILED, held back: ${error.message}`);
+    }
+  }
+  for (const moon of extra) if (problems[moon]) console.error(`${moon} (not in the pool): ${problems[moon]}`);
+  console.log(`${targets.length - failed} of ${targets.length} pool moons restored, new codes saved, free again`);
+  if (failed) process.exitCode = 1;
+}
+
+// A restore gives the moon new keys, so its code must change.
+async function saveNewCode(host, moon, before) {
   const code = await codeOf(host, moon);
   if (code === before) throw new Error('the moon still has its old code, so the restore did not finish');
   updateJson(cfg.poolFile, pool => { pool[moon].code = code; });
   updateJson(cfg.claimsFile, c => { delete c[moon]; });
 }
 
-// Theseus restores a moon in stages. It is done when the moon has no
-// recovery in progress and is running again; a failed recovery says why.
-async function waitUntilRestored(host, moon, timeoutMs) {
-  const started = Date.now();
-  let seen = false;
-  while (Date.now() - started < timeoutMs) {
-    await new Promise(r => setTimeout(r, 1000));
-    const row = (await host.scry('theseus/ui')).moons.find(m => m.ship === moon);
-    if (!row) throw new Error(`${moon} is no longer on the host`);
-    if (row.recovery) {
-      seen = true;
-      if (row.recovery.stage === 'failed') throw new Error(`the restore failed: ${row.recovery.reason || 'no reason given'}`);
-      continue;
-    }
-    if (row.status === 'healthy' && !row.paused && (seen || Date.now() - started > 10_000)) return;
-  }
-  throw new Error(`the moon did not finish restoring within ${timeoutMs / 1000}s`);
+function holdBack(list, message) {
+  const at = new Date().toISOString();
+  updateJson(cfg.claimsFile, c => { for (const m of list) c[m] = {...c[m], status: 'recycle-error', at, error: message.slice(0, 500)}; });
 }
 
-// The recycle poke restores a snapshot holding exactly this one moon.
+// Theseus restores each moon in stages. A moon is done when it has no
+// recovery in progress and is running again; a failed recovery says why.
+// Returns each moon's problem, or nothing for those that came back.
+async function waitUntilRestored(host, list, timeoutMs) {
+  const started = Date.now();
+  const seen = new Set();
+  const pending = new Set(list);
+  const problems = {};
+  while (pending.size && Date.now() - started < timeoutMs) {
+    await new Promise(r => setTimeout(r, 1000));
+    const rows = new Map((await host.scry('theseus/ui')).moons.map(m => [m.ship, m]));
+    for (const moon of [...pending]) {
+      const row = rows.get(moon);
+      if (!row) { problems[moon] = `${moon} is no longer on the host`; pending.delete(moon); continue; }
+      if (row.recovery) {
+        seen.add(moon);
+        if (row.recovery.stage === 'failed') {
+          problems[moon] = `the restore failed: ${row.recovery.reason || 'no reason given'}`;
+          pending.delete(moon);
+        }
+        continue;
+      }
+      if (row.status === 'healthy' && !row.paused && (seen.has(moon) || Date.now() - started > 10_000)) pending.delete(moon);
+    }
+    if (list.length > 1) process.stdout.write(`\r${list.length - pending.size} of ${list.length} moons back`);
+  }
+  if (list.length > 1) process.stdout.write('\n');
+  for (const moon of pending) problems[moon] = `the moon did not finish restoring within ${timeoutMs / 1000}s`;
+  return problems;
+}
+
+// A snapshot by path, or a set: every snapshot in it, as one.
+function findSnapshot(ui, path) {
+  const exact = ui.snapshots.find(s => s.path === path);
+  if (exact) return exact;
+  const members = ui.snapshots.filter(s => s.set === path);
+  if (!members.length) return null;
+  return {path, ships: members.flatMap(s => s.ships), compatible: members.every(s => s.compatible !== false)};
+}
+// The recycle poke restores the moon's own snapshot: one holding just it, or
+// its snapshot in a set.
 function checkSnapshot(ui, moon, path) {
-  const snap = ui.snapshots.find(s => s.path === path);
-  need(snap, `no snapshot ${path} on the host`);
-  need(snap.ships.length === 1 && snap.ships[0] === moon, `snapshot ${path} holds ${snap.ships.join(', ')}, not just ${moon}`);
+  const snap = ui.snapshots.find(s => s.path === path) || ui.snapshots.find(s => s.set === path && s.ships.length === 1 && s.ships[0] === moon);
+  need(snap || findSnapshot(ui, path), `no snapshot ${path} on the host`);
+  need(snap && snap.ships.length === 1 && snap.ships[0] === moon, `snapshot ${path} has no snapshot of just ${moon}`);
   need(snap.compatible !== false, `snapshot ${path} does not fit the host's current Theseus`);
 }
 
@@ -199,7 +289,7 @@ function parse(argv) {
     const a = argv[i];
     if (a.startsWith('--')) {
       const key = a.slice(2);
-      if (['snapshot', 'timeout'].includes(key)) flags[key] = argv[++i];
+      if (['snapshot', 'timeout', 'fleet'].includes(key)) flags[key] = argv[++i];
       else flags[key] = true;
     } else if (!command) command = a;
     else if (a.startsWith('/')) flags._.push(a);
@@ -212,10 +302,12 @@ function usage() {
   console.log(`usage:
   node pool.mjs list
   node pool.mjs add ~moon... [--snapshot /name]
+  node pool.mjs add --fleet <name> [--snapshot /set]
   node pool.mjs snapshot ~moon /name
   node pool.mjs refresh [~moon...]
   node pool.mjs release ~moon...
   node pool.mjs remove ~moon...
-  node pool.mjs recycle (~moon... | --claimed) [--execute] [--timeout seconds]`);
+  node pool.mjs recycle (~moon... | --claimed) [--execute] [--timeout seconds]
+  node pool.mjs recycle-fleet /snapshot [--execute] [--timeout seconds]`);
   if (command) process.exitCode = 1;
 }
