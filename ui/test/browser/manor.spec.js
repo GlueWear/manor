@@ -28,13 +28,19 @@ test('resetting the used moons frees them and Theseus restores them', async ({pa
   await expect(dialog).toContainText('Reset 2 moons to their clean snapshot?');
   await dialog.getByRole('button', {name: 'Reset'}).click();
   await expect(page.getByRole('dialog')).toHaveCount(0);
-  await expect(page.getByRole('status').filter({hasText: 'Resetting 2 moons.'})).toBeVisible();
+  const progress = page.getByRole('status', {name: 'Reset progress'});
+  await expect(progress).toBeVisible();
+  await expect(progress).toContainText('0 of 2 ready');
+  await expect(progress.getByRole('progressbar', {name: 'Moons ready after reset'})).toHaveAttribute('max', '2');
+  await page.screenshot({path: 'test-results/manor-reset-progress.png', fullPage: true});
   await expect(row(page, '~ritdex-sorled').locator('.status-col .badge')).toHaveText('resetting');
   const pokes = await (await request.get(`${MOCK}/pokes`)).json();
   expect(pokes.at(-1)).toEqual({kind: 'reset', value: {ships: ['~lonteb-tarhus-siglup-narwet', '~ritdex-sorled-siglup-narwet']}});
   await expect(page.getByRole('button', {name: /Reset used moons \(0\)/})).toBeDisabled();
   // once restored, they are free again
   await expect(row(page, '~ritdex-sorled').locator('.status-col .badge')).toHaveText('free', {timeout: 8000});
+  await expect(progress).toContainText('2 of 2 ready');
+  await expect(progress).toContainText('Reset complete');
 });
 
 test('one moon can be freed as it is, reset, or removed', async ({page}) => {

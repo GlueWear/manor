@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import {baseProblem, daMs, landingProblem, moonStatus, publicLink, shortMoon, snapshotChoices, usedMoons, validateState} from '../src/model.mjs';
+import {baseProblem, daMs, landingProblem, moonStatus, publicLink, resetProgress, shortMoon, snapshotChoices, usedMoons, validateState} from '../src/model.mjs';
 
 const healthy = {status: 'healthy', paused: false, recovery: null, desks: [{desk: 'base', stage: 'running'}]};
 
@@ -24,6 +24,17 @@ test('a moon is free only when no visitor has it and Theseus says it is ready', 
 
 test('used moons are the ones with a claim', () => {
   assert.deepEqual(usedMoons([{ship: '~a', claim: {at: 1}}, {ship: '~b', claim: null}]), ['~a']);
+});
+
+test('reset progress counts reported recovery and readiness, including refusals', () => {
+  const run = {ships: ['~a', '~b', '~c'], phase: 'requesting', priorLogKeys: ['1:old']};
+  const rows = [{ship: '~a', status: {key: 'free'}}, {ship: '~b', status: {key: 'resetting'}}, {ship: '~c', status: {key: 'catching'}}];
+  assert.deepEqual(resetProgress(run, rows), {total: 3, ready: 0, restoring: 0, catching: 0, failed: 0, waiting: 3, complete: false});
+  const active = resetProgress({...run, phase: 'tracking'}, rows);
+  assert.deepEqual(active, {total: 3, ready: 1, restoring: 1, catching: 1, failed: 0, waiting: 0, complete: false});
+  const log = [{at: 2, text: 'Theseus refused to reset ~b. Its Dojo shows why.'}, {at: 1, text: 'old'}];
+  const done = resetProgress({...run, phase: 'tracking'}, [{ship: '~a', status: {key: 'free'}}, {ship: '~b', status: {key: 'free'}}, {ship: '~c', status: {key: 'free'}}], log);
+  assert.deepEqual(done, {total: 3, ready: 2, restoring: 0, catching: 0, failed: 1, waiting: 0, complete: true});
 });
 
 test('snapshot choices hold every moon of the fleet, newest first', () => {

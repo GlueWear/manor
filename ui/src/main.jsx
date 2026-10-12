@@ -3,7 +3,7 @@ import {createRoot} from 'react-dom/client';
 import {AlertCircle, ArrowUpRight, Check, Copy, DoorOpen, Download, Folder, History, ImageUp, Link2, LoaderCircle, Pencil, RotateCcw, Settings, Trash2, Unlock, Users, X} from 'lucide-react';
 import '@urbit/sigil-js';
 import {act, gateway, manorState, profiles as fetchProfiles, setProfile, theseusState, watchManor, watchProfiles, watchUi, SignedOut} from './api';
-import {avatarSrc, baseProblem, caddyfile, daMs, FRONT_DEFAULTS, frontProblem, landingProblem, moonOrigin, moonStatus, publicLink, snapshotChoices, usedMoons} from './model.mjs';
+import {avatarSrc, baseProblem, caddyfile, daMs, FRONT_DEFAULTS, frontProblem, landingProblem, moonOrigin, moonStatus, publicLink, resetProgress, snapshotChoices, usedMoons} from './model.mjs';
 import './style.css';
 
 const time = ms => new Date(ms).toLocaleTimeString([], {hour: 'numeric', minute: '2-digit'});
@@ -148,6 +148,7 @@ function App() {
   const [settings, setSettings] = useState({base: '', landing: ''});
   const [profileData, setProfileData] = useState(null);
   const [gw, setGw] = useState(undefined);
+  const [resetRun, setResetRun] = useState(null);
   const mounted = useRef(true);
   const editedSettings = useRef(false);
 
@@ -217,7 +218,8 @@ function App() {
     if (busy) return false;
     setBusy(true); setError(''); setNotice(''); setFormError('');
     try {
-      await act(action, rejected); await refresh(); setNotice(done);
+      await act(action, rejected); await refresh(); if (done) setNotice(done);
+      if (action.connect) setResetRun(null);
       if (action.connect || action.reset) loadProfiles();
       return true;
     }
@@ -274,6 +276,7 @@ function App() {
   const moons = new Map((theseus?.moons || []).map(m => [m.ship, m]));
   const pool = [...(manor?.pool || [])].sort((a, b) => a.ship.localeCompare(b.ship));
   const rows = pool.map(row => ({...row, status: moonStatus(row, moons.get(row.ship), now)}));
+  const reset = resetProgress(resetRun, rows, manor?.log || []);
   const count = key => rows.filter(r => r.status.key === key).length;
   const used = usedMoons(pool);
   // A link to a moon runs out on its own: show it as free then. This only
@@ -297,8 +300,10 @@ function App() {
       if (await run({connect: {fleet: form.fleet, snapshot: form.snapshot}}, `Connected fleet ${form.fleet}.`, 'The host refused to connect this fleet. Its Dojo shows why.', setFormError)) setModal(null);
       return;
     }
-    const verb = {reset: 'Resetting', release: 'Freed', remove: 'Removed'}[type];
-    const ok = await run({[type]: {ships: value.ships}}, `${verb} ${value.ships.length === 1 ? value.ships[0] : plural(value.ships.length, 'moon')}.`, 'The host refused this. Its Dojo shows why.', setFormError);
+    const verb = {release: 'Freed', remove: 'Removed'}[type];
+    if (type === 'reset') setResetRun({ships: value.ships, phase: 'requesting', priorLogKeys: (manor?.log || []).map(entry => `${entry.at}:${entry.text}`)});
+    const ok = await run({[type]: {ships: value.ships}}, type === 'reset' ? '' : `${verb} ${value.ships.length === 1 ? value.ships[0] : plural(value.ships.length, 'moon')}.`, 'The host refused this. Its Dojo shows why.', setFormError);
+    if (type === 'reset') setResetRun(current => current && {...current, phase: ok ? 'tracking' : 'error'});
     if (ok) setModal(null);
   }
   async function saveSettings(e) {
@@ -318,18 +323,38 @@ function App() {
 
   return <div className="page">
     <header className="top">
-      <div className="brand"><img src="/apps/manor/icon.png" alt="" className="brand-icon"/><div><h1>Manor</h1><span className="muted">{host ? `Visitors' moons on ${host}` : 'Visitors\' moons'}</span></div></div>
-      <a className="out-link" href="/apps/theseus/">Theseus <ArrowUpRight size={14}/></a>
+      <div className="top-inner">
+        <div className="brand"><img src="/apps/manor/icon.png" alt="" className="brand-icon"/><div><span className="brand-kicker">MOON HOSTING</span><h1>Manor</h1><span className="brand-subtitle">{host ? `Visitor pool on ${host}` : 'Visitor pool'}</span></div></div>
+        <a className="out-link" href="/apps/theseus/">Open Theseus <ArrowUpRight size={14}/></a>
+      </div>
     </header>
+
+    <div className="workspace">
 
     {signedOut && <div role="alert" className="banner error"><AlertCircle size={18}/><span>Sign in to your ship to manage Manor.</span><a href="/~/login?redirect=/apps/manor">Sign in <ArrowUpRight size={14}/></a></div>}
     {loadError && <div role="alert" className="banner error"><AlertCircle size={18}/><span>{loadError}</span></div>}
     {error && <div role="alert" className="banner error"><AlertCircle size={18}/><span>{error}</span><IconButton label="Dismiss error" onClick={() => setError('')}><X size={16}/></IconButton></div>}
     {notice && <div role="status" className="banner success"><Check size={17}/><span>{notice}</span><IconButton label="Dismiss" onClick={() => setNotice('')}><X size={16}/></IconButton></div>}
-    {busy && <div className="pending" role="status"><LoaderCircle size={16} className="spin"/>Waiting for the host</div>}
+    {reset && <section className={`reset-progress ${reset.failed || resetRun.phase === 'error' ? 'has-error' : ''}`} role="status" aria-label="Reset progress">
+      <div className="reset-progress-head">
+        <div><span className="reset-eyebrow">FLEET OPERATION</span><strong>{resetRun.phase === 'error' ? 'Reset request not confirmed' : resetRun.phase === 'requesting' ? 'Requesting reset' : reset.complete ? reset.failed ? 'Reset needs attention' : 'Reset complete' : 'Restoring moons'}</strong></div>
+        <IconButton label="Dismiss reset progress" onClick={() => setResetRun(null)}><X size={16}/></IconButton>
+      </div>
+      <progress aria-label="Moons ready after reset" max={reset.total} value={resetRun.phase === 'requesting' ? undefined : reset.ready + reset.failed}/>
+      <div className="reset-progress-detail">
+        <span>{reset.ready} of {reset.total} ready</span>
+        {reset.restoring > 0 && <span>{reset.restoring} restoring</span>}
+        {reset.catching > 0 && <span>{reset.catching} catching up</span>}
+        {reset.failed > 0 && <span className="reset-fail">{reset.failed} failed</span>}
+        {reset.waiting > 0 && <span>{reset.waiting} awaiting status</span>}
+        {resetRun.phase === 'error' && <span>Check the host before trying again.</span>}
+      </div>
+    </section>}
+    {busy && resetRun?.phase !== 'requesting' && <div className="pending" role="status"><LoaderCircle size={16} className="spin"/>Waiting for the host</div>}
     {loading && <div className="pending" role="status"><LoaderCircle size={16} className="spin"/>Loading</div>}
 
     {manor && <>
+      <div className="overview-grid">
       <section className="card" aria-labelledby="link-title">
         <h2 id="link-title"><Link2 size={18}/>Public link</h2>
         {link ? <div className="link-row"><a href={link} target="_blank" rel="noreferrer" className="public-link">{link}</a><button type="button" onClick={copyLink}><Copy size={15}/>Copy</button></div>
@@ -345,13 +370,14 @@ function App() {
           <button type="button" className={fleet ? '' : 'primary'} disabled={busy || !theseus} onClick={() => open('connect')}>{fleet ? 'Change fleet' : 'Connect a fleet'}</button>
         </div>
       </section>
+      </div>
 
       <section className="card" aria-labelledby="moons-title">
         <div className="card-head">
           <h2 id="moons-title"><Users size={18}/>Moons</h2>
           <div className="tools">
             <button type="button" disabled={busy || !used.length} onClick={() => open('reset', {ships: used, used: true})}><RotateCcw size={15}/>Reset used moons ({used.length})</button>
-            <button type="button" disabled={busy || !pool.length} onClick={() => open('reset', {ships: pool.map(r => r.ship), all: true})}><RotateCcw size={15}/>Reset all</button>
+            <button type="button" disabled={busy || !pool.length} onClick={() => open('reset', {ships: pool.map(r => r.ship), all: true})}><RotateCcw size={15}/>Reset fleet</button>
           </div>
         </div>
         {pool.length > 0 && <div className="metrics">
@@ -390,6 +416,7 @@ function App() {
         {manor.log.length ? <ul className="log">{manor.log.map((entry, i) => <li key={`${entry.at}-${i}`}><span className="muted">{day(entry.at)}</span>{entry.text}</li>)}</ul> : <p className="muted">Nothing yet.</p>}
       </section>
     </>}
+    </div>
 
     {modal && <Dialog close={() => setModal(null)} busy={busy} title={{connect: 'Connect a fleet', reset: modal.value?.used ? 'Reset used moons' : modal.value?.all ? 'Reset all moons' : 'Reset moon', release: 'Free moon', remove: 'Remove moon', profile: `Name and picture of ${modal.value?.ship}`}[modal.type]}>
       <form onSubmit={confirm}>

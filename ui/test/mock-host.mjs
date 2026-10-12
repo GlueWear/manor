@@ -1,11 +1,13 @@
 // Test-only stand-in for the host's Eyre: %manor's state scry and admin
 // pokes, and Theseus's ui.json. Mirrors app/manor.hoon's checks.
 import {createServer} from 'node:http';
+import {readFileSync} from 'node:fs';
 
 const host = '~siglup-narwet';
 const moon = name => `~${name}-siglup-narwet`;
 const [A, B, C, D, E] = ['ritdex-sorled', 'lonteb-tarhus', 'fopsep-litruc', 'dozpen-dozpen', 'ribmut-mogwyn'].map(moon);
 const png = Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==', 'base64');
+const manorIcon = readFileSync(new URL('../../desk/web/icon.png', import.meta.url));
 const ready = ship => ({ship, status: 'healthy', paused: false, recovery: null, desks: [{desk: 'base', stage: 'running'}, {desk: 'glurff', stage: 'running'}]});
 
 let manor, theseus, signedOut, pokes, profiles;
@@ -125,7 +127,7 @@ createServer(async (req, res) => {
   // a change made elsewhere, e.g. in the moon's own Noltbook
   const change = /^\/profile-change\?ship=(~[a-z-]+)&name=([^&]*)$/.exec(url);
   if (change) {const p = profiles.get(change[1]); if (p) {p.name = decodeURIComponent(change[2]) || null; pushProfile(change[1]);} return res.end('ok');}
-  if (url === '/apps/manor/icon.png') {res.setHeader('content-type', 'image/png'); return res.end(png);}
+  if (url === '/apps/manor/icon.png') {res.setHeader('content-type', 'image/png'); return res.end(manorIcon);}
   if (url.startsWith('/~/scry/') && signedOut) {res.statusCode = 403; return res.end();}
   if (url === '/~/scry/manor/state.json') return json(res, manor);
   if (url === '/~/scry/theseus/ui.json') return json(res, theseus);

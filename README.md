@@ -88,8 +88,9 @@ The Manor page shows every moon: free, link sent, in use since, resetting,
 catching up, or needing attention.
 
 - **Reset used moons** after a demo: Theseus restores each one from the
-  snapshot with new keys, and it goes out again once it is ready.
-- **Reset all**, or reset, free or remove one moon.
+  snapshot with new keys, and it goes out again once it is ready. A bar
+  shows how many are ready, still restoring or catching up, or failed.
+- **Reset fleet**, or reset, free or remove one moon.
 - **Change fleet** to switch to another fleet and snapshot.
 - **Names and pictures:** each moon shows its full `@p`, and its Noltbook
   name and picture when it runs Noltbook. Click a Noltbook moon's name or

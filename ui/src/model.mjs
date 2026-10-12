@@ -60,6 +60,28 @@ export function moonStatus(row, moon, now = Date.now()) {
 // Moons a visitor has had, or been sent a link to: reset these after a demo.
 export const usedMoons = pool => pool.filter(row => row.claim).map(row => row.ship);
 
+// A reset request is asynchronous. Count only moons that Theseus reports
+// ready, and surface both recovery failures and refusals from Manor's log.
+export function resetProgress(run, rows, log = []) {
+  if (!run) return null;
+  const byShip = new Map(rows.map(row => [row.ship, row.status.key]));
+  const refusals = new Set(log
+    .filter(entry => !run.priorLogKeys.includes(`${entry.at}:${entry.text}`))
+    .filter(entry => entry.text.startsWith('Theseus refused to reset '))
+    .map(entry => entry.text.slice('Theseus refused to reset '.length).split('.')[0]));
+  const total = run.ships.length;
+  let ready = 0, restoring = 0, catching = 0, failed = 0;
+  if (run.phase === 'tracking') for (const ship of run.ships) {
+    const status = byShip.get(ship);
+    if (refusals.has(ship) || status === 'failed' || status === 'missing') failed++;
+    else if (status === 'free') ready++;
+    else if (status === 'resetting') restoring++;
+    else if (status === 'catching') catching++;
+  }
+  return {total, ready, restoring, catching, failed, waiting: total - ready - restoring - catching - failed,
+    complete: run.phase === 'tracking' && ready + failed === total};
+}
+
 // The snapshots that can reset every moon of a fleet: a set holding a
 // snapshot of each, or one moon's own. Newest first.
 export function snapshotChoices(fleet, snapshots) {
