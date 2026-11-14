@@ -57,7 +57,10 @@ def source(root, component="agent", tests=False):
         app = stripped(root / "desk/app/manor.hoon").replace("\n|%\n", "\n=+\n|%\n", 1)
         code += bind("ctor", app)
     if tests:
-        code += (root / ("ops/unified-" + component + "-tests.hoon")).read_text()
+        checks = (root / ("ops/unified-" + component + "-tests.hoon")).read_text()
+        if component == "pool":
+            checks = checks.removesuffix("0\n") + (root / "ops/visitor-tests.hoon").read_text().removesuffix("0\n") + (root / "ops/idle-tests.hoon").read_text()
+        code += checks
     else:
         value = {"agent": "ctor", "local": "control", "pool": "manor-pool"}[component]
         code += "(mug " + (value if component == "agent" else "!>(" + value + ")") + ")\n"

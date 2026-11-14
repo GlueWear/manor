@@ -56,7 +56,7 @@ async function proxy(t, ships, eyre, trustFile = null, publicTLS = false) {
     child.on('error', err => {clearTimeout(timer); reject(err);});
     child.on('exit', () => {clearTimeout(timer); reject(new Error(`Test Caddy exited before readiness: ${output}`));});
   });
-  return (host, path, cookie = '', headers = {}) => new Promise((resolve, reject) => {
+  const get = (host, path, cookie = '', headers = {}) => new Promise((resolve, reject) => {
     const send = publicTLS ? secureRequest : request;
     const req = send({hostname: '127.0.0.1', servername: host, ca, port, path, headers: {host, cookie, 'x-forwarded-host': 'forged.example', ...headers}}, res => {
       res.resume(); res.on('end', () => resolve({status: res.statusCode, headers: res.headers}));
@@ -64,7 +64,39 @@ async function proxy(t, ships, eyre, trustFile = null, publicTLS = false) {
     req.setTimeout(3000, () => req.destroy(new Error('Local proxy request timed out')));
     req.on('error', reject); req.end();
   });
+  get.stream = (host, path, cookie = '') => new Promise((resolve, reject) => {
+    const req = request({hostname: '127.0.0.1', port, path, headers: {host, cookie}}, res => {
+      res.once('data', data => resolve({status: res.statusCode, headers: res.headers, data: data.toString(), close: () => req.destroy()}));
+    });
+    req.setTimeout(3000, () => req.destroy(new Error('Streaming proxy request timed out')));
+    req.on('error', reject); req.end();
+  });
+  return get;
 }
+
+test('visitor events stream immediately with isolated cookies and cancel upstream on close', {timeout: 15000}, async t => {
+  let seen, closed;
+  const upstreamClosed = new Promise(resolve => {closed = resolve;});
+  const eyre = await listen(t, createServer((req, res) => {
+    seen = {path: req.url, cookie: req.headers.cookie};
+    res.writeHead(200, {'content-type': 'text/event-stream', 'cache-control': 'no-store'});
+    res.write('event: policy\ndata: {"enabled":true}\n\n');
+    res.on('close', closed);
+  }));
+  const port = await listen(t, createServer((req, res) => res.end('~zod')));
+  const get = await proxy(t, [{ship: '~zod', port}], eyre);
+  if (!get) return;
+  const stream = await get.stream('zod.localhost', '/~manor/visit/events?tab=fixture&visit=generation', 'manor-visit=proof; urbauth-~siglup-narwet=host; urbauth-~zod=owner');
+  assert.equal(stream.status, 200);
+  assert.match(stream.headers['content-type'], /^text\/event-stream/);
+  assert.match(stream.data, /event: policy/);
+  assert.deepEqual(seen, {path: '/apps/manor/public/managed/visit/~zod/events?tab=fixture&visit=generation', cookie: 'manor-visit=proof'});
+  stream.close();
+  await Promise.race([upstreamClosed, new Promise((_, reject) => {
+    const timer = setTimeout(() => reject(new Error('Caddy left the upstream stream open')), 2000);
+    timer.unref();
+  })]);
+});
 
 test('local Caddy routes exact ships and never forwards another ship cookie', {timeout: 20000}, async t => {
   const ship = '~zod', seen = [];
@@ -92,6 +124,14 @@ test('local Caddy routes exact ships and never forwards another ship cookie', {t
   assert.equal(seen.at(-1).cookie, undefined);
   await get('zod.localhost', '/apps/glurff/', 'urbauth-~zod-extra=wrong; not-urbauth-~zod=wrong');
   assert.equal(seen.at(-1).cookie, undefined);
+  const visitCookies = `${cookies}; manor-visit=visit-fixture`;
+  const shell = await get('zod.localhost', '/apps/glurff/', visitCookies, {'sec-fetch-dest': 'document'});
+  assert.equal(shell.headers['cache-control'], 'no-store');
+  assert.deepEqual(seen.at(-1), {to: 'host', path: '/apps/manor/public/managed/visit/~zod', cookie: 'manor-visit=visit-fixture', forwarded: 'zod.localhost'});
+  await get('zod.localhost', '/apps/glurff/', visitCookies, {'sec-fetch-dest': 'iframe'});
+  assert.deepEqual(seen.at(-1), {to: 'ship', path: '/apps/glurff/', cookie: 'urbauth-~zod=own-fixture'});
+  await get('zod.localhost', '/~manor/visit/close', visitCookies);
+  assert.deepEqual(seen.at(-1), {to: 'host', path: '/apps/manor/public/managed/visit/~zod/close', cookie: 'manor-visit=visit-fixture', forwarded: 'zod.localhost'});
   const count = seen.length;
   for (const path of ['/~/login', '/apps/manor/', '/full/assign', '/managed/assign']) assert.equal((await get('join.localhost', path)).status, 404);
   assert.equal((await get('unknown.localhost', '/')).status, 404);

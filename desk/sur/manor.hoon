@@ -25,6 +25,7 @@
       [%remove ships=(list ship)]           ::  out of the pool
       [%settings =settings]
       [%hosting base=@t landing=@t pool=?(%ships %theseus)]
+      [%idle-policy minutes=@ud]
       [%full-add who=ship]
       [%full-remove who=ship]
       [%full-unlock who=ship]
@@ -103,12 +104,49 @@
       serial=@ud
       apps=(map ship (list installed-app:manor-ship))
   ==
++$  managed-pool-6
+  $:  ships=(map ship managed-ship)
+      claims=(map ship claim)
+      requests=(map @ta managed-request)
+      serial=@ud
+      apps=(map ship (list installed-app:manor-ship))
+  ==
++$  visitor-7
+  $:  claim-at=@da
+      proof=@uvH
+      tabs=(set @ta)
+      seen=(set @ta)
+      deadline=(unit @da)
+      revision=@ud
+  ==
++$  managed-pool-7
+  $:  ships=(map ship managed-ship)
+      claims=(map ship claim)
+      requests=(map @ta managed-request)
+      serial=@ud
+      apps=(map ship (list installed-app:manor-ship))
+      visits=(map ship visitor-7)
+  ==
++$  visitor
+  $:  claim-at=@da
+      proof=@uvH
+      tabs=(set @ta)
+      seen=(set @ta)
+      deadline=(unit @da)
+      revision=@ud
+      idle-tabs=(set @ta)
+      idle-at=(unit @da)
+      idle-revision=@ud
+      streams=(map @ta @ta)
+  ==
 +$  managed-pool
   $:  ships=(map ship managed-ship)
       claims=(map ship claim)
       requests=(map @ta managed-request)
       serial=@ud
       apps=(map ship (list installed-app:manor-ship))
+      visits=(map ship visitor)
+      idle-minutes=@ud
   ==
 ++  migrate-requests
   |=  old=(map @ta managed-request-5)
@@ -117,11 +155,24 @@
 ++  migrate-managed
   |=  old=managed-pool-4
   ^-  managed-pool
-  [ships.old claims.old (migrate-requests requests.old) serial.old ~]
+  [ships.old claims.old (migrate-requests requests.old) serial.old ~ ~ 0]
 ++  migrate-managed-5
   |=  old=managed-pool-5
   ^-  managed-pool
-  [ships.old claims.old (migrate-requests requests.old) serial.old apps.old]
+  [ships.old claims.old (migrate-requests requests.old) serial.old apps.old ~ 0]
+++  migrate-managed-6
+  |=  old=managed-pool-6
+  ^-  managed-pool
+  [ships.old claims.old requests.old serial.old apps.old ~ 0]
+++  migrate-managed-7
+  |=  old=managed-pool-7
+  ^-  managed-pool
+  :*  ships.old  claims.old  requests.old  serial.old  apps.old
+      %-  ~(run by visits.old)
+      |=  v=visitor-7
+      [claim-at.v proof.v tabs.v seen.v deadline.v revision.v ~ ~ 0 ~]
+      0
+  ==
 ::  Preserve active legacy connections until their operator switches agents.
 ++  migrate-pool
   |=  old=full-pool
@@ -134,6 +185,8 @@
       (migrate-requests requests.old)
       serial.old
       ~
+      ~
+      0
   ==
 ::  %theseus's restore request ($recycle in its /sur/theseus)
 ::

@@ -87,18 +87,44 @@
       =settings:manor
       log=(list [at=@da text=@t])
       front=(unit @da)
+      full=managed-pool-6:manor
+      controlled=local-state:manor-ship
+      pair-requests=(map ship @da)
+      visitor-pool=?(%ships %theseus)
+  ==
++$  state-7
+  $:  %7
+      pool=(map ship path)
+      fleet=(unit [name=@tas snapshot=path])
+      claims=(map ship claim:manor)
+      =settings:manor
+      log=(list [at=@da text=@t])
+      front=(unit @da)
+      full=managed-pool-7:manor
+      controlled=local-state:manor-ship
+      pair-requests=(map ship @da)
+      visitor-pool=?(%ships %theseus)
+  ==
++$  state-8
+  $:  %8
+      pool=(map ship path)
+      fleet=(unit [name=@tas snapshot=path])
+      claims=(map ship claim:manor)
+      =settings:manor
+      log=(list [at=@da text=@t])
+      front=(unit @da)
       full=managed-pool:manor
       controlled=local-state:manor-ship
       pair-requests=(map ship @da)
       visitor-pool=?(%ships %theseus)
   ==
-+$  versioned-state  $%(state-0 state-1 state-2 state-3 state-4 state-5 state-6)
++$  versioned-state  $%(state-0 state-1 state-2 state-3 state-4 state-5 state-6 state-7 state-8)
 +$  card  card:agent:gall
 ::  how long a one-time link to a moon works
 ::
 ++  ticket-life  ~m2
 --
-=|  state-6
+=|  state-8
 =*  state  -
 =<
 %-  agent:dbug
@@ -120,17 +146,19 @@
   ^-  (quip card _this)
   =/  got  !<(versioned-state old)
   =/  fallback=local-state:manor-ship
-    ?:  |(=(%3 -.got) =(%4 -.got) =(%5 -.got) =(%6 -.got))  initial:manor-ship
+    ?:  |(=(%3 -.got) =(%4 -.got) =(%5 -.got) =(%6 -.got) =(%7 -.got) =(%8 -.got))  initial:manor-ship
     bootstrap:~(. control [bowl initial:manor-ship])
-  =/  loaded=state-6
+  =/  loaded=state-8
     ?-  -.got
-      %6  got
-      %5  [%6 pool.got fleet.got claims.got settings.got log.got front.got (migrate-managed-5:manor full.got) controlled.got pair-requests.got %theseus]
-      %4  [%6 pool.got fleet.got claims.got settings.got log.got front.got (migrate-managed:manor full.got) controlled.got pair-requests.got %theseus]
-      %3  [%6 pool.got fleet.got claims.got settings.got log.got front.got (migrate-managed:manor full.got) controlled.got ~ %theseus]
-      %2  [%6 pool.got fleet.got claims.got settings.got log.got front.got (migrate-pool:manor full.got) fallback ~ %theseus]
-      %1  [%6 pool.got fleet.got claims.got settings.got log.got front.got *managed-pool:manor fallback ~ %theseus]
-      %0  [%6 pool.got fleet.got claims.got settings.got log.got ~ *managed-pool:manor fallback ~ %theseus]
+      %8  got
+      %7  [%8 pool.got fleet.got claims.got settings.got log.got front.got (migrate-managed-7:manor full.got) controlled.got pair-requests.got visitor-pool.got]
+      %6  [%8 pool.got fleet.got claims.got settings.got log.got front.got (migrate-managed-6:manor full.got) controlled.got pair-requests.got visitor-pool.got]
+      %5  [%8 pool.got fleet.got claims.got settings.got log.got front.got (migrate-managed-5:manor full.got) controlled.got pair-requests.got %theseus]
+      %4  [%8 pool.got fleet.got claims.got settings.got log.got front.got (migrate-managed:manor full.got) controlled.got pair-requests.got %theseus]
+      %3  [%8 pool.got fleet.got claims.got settings.got log.got front.got (migrate-managed:manor full.got) controlled.got ~ %theseus]
+      %2  [%8 pool.got fleet.got claims.got settings.got log.got front.got (migrate-pool:manor full.got) fallback ~ %theseus]
+      %1  [%8 pool.got fleet.got claims.got settings.got log.got front.got *managed-pool:manor fallback ~ %theseus]
+      %0  [%8 pool.got fleet.got claims.got settings.got log.got ~ *managed-pool:manor fallback ~ %theseus]
     ==
   =/  resumed  resume:~(. manor-pool [bowl full.loaded])
   =/  local  resume:~(. control [bowl controlled.loaded])
@@ -207,10 +235,25 @@
     ?>  ?=([%behn %wake ~] sign-arvo)
     =^  cards  full  (timeout:~(. manor-pool [bowl full]) i.t.wire)
     [(snoc cards state-signal:hc) this]
+  ?:  ?=([%visit-close @ @ @ ~] wire)
+    ?>  ?=([%behn %wake ~] sign-arvo)
+    =^  cards  full
+      (close-visit:~(. manor-pool [bowl full]) (slav %p i.t.wire) `@uvH`(slav %uv i.t.t.wire) (slav %ud i.t.t.t.wire))
+    [(snoc cards state-signal:hc) this]
+  ?:  ?=([%visit-idle @ @ @ ~] wire)
+    ?>  ?=([%behn %wake ~] sign-arvo)
+    =^  cards  full
+      (idle-expire:~(. manor-pool [bowl full]) (slav %p i.t.wire) `@uvH`(slav %uv i.t.t.wire) (slav %ud i.t.t.t.wire))
+    [(snoc cards state-signal:hc) this]
   ?:  ?=([%bind ~] wire)  `this
   (on-arvo:def wire sign-arvo)
 ::
-++  on-leave  on-leave:def
+++  on-leave
+  |=  =path
+  ^-  (quip card _this)
+  ?.  ?=([%http-response @ ~] path)  (on-leave:def path)
+  =.  full  (visitor-unwatch:~(. manor-pool [bowl full]) i.t.path)
+  `this
 ++  on-fail   on-fail:def
 --
 |_  =bowl:gall
@@ -273,6 +316,9 @@
       %ship-unlock
     =^  cards  full  (unlock:~(. manor-pool [bowl full]) who.action)
     [cards state(log (add-log 'Requested managed-ship session revocation.'))]
+      %idle-policy
+    =^  cards  full  (set-idle:~(. manor-pool [bowl full]) minutes.action)
+    [cards state(log (add-log 'Visitor idle policy updated.'))]
       %ship-profile
     =^  cards  full  (profile:~(. manor-pool [bowl full]) who.action name.action avatar.action)
     [cards state(log (add-log 'Requested managed-ship profile update.'))]
@@ -522,6 +568,31 @@
     |=  =simple-payload:http
     ^-  (list card)
     (give-simple-payload:app:server eyre-id simple-payload)
+  =/  visit-prefix  "/apps/manor/public/managed/visit/"
+  ?:  =(visit-prefix (scag (lent visit-prefix) pat))
+    =/  fc  ~(. manor-pool [bowl full])
+    =/  target  (origin:fc req ?:(=(visitor-pool %ships) base.settings ''))
+    ?~  target  [(give [[404 ~] ~]) state]
+    =/  tail  (slag (lent visit-prefix) pat)
+    =/  slash  (find "/" tail)
+    =/  who  (slaw %p (crip ?~(slash tail (scag u.slash tail))))
+    ?~  who  [(give [[404 ~] ~]) state]
+    ?~  slash
+      ?.  &((visitor-valid:fc u.who req u.target |) =(%'GET' method.request.req))
+        [(give (page 410 'This visit has ended.' 'Return to the lever to get a ship.')) state]
+      =/  payload  (file-payload /web/visit/html 'text/html; charset=utf-8')
+      [(give [[200 ['content-type' 'text/html; charset=utf-8'] ['cache-control' 'no-store'] ['vary' 'Sec-Fetch-Dest, Cookie'] ~] +.payload]) state]
+    =/  op  (crip (slag +(u.slash) tail))
+    ?:  |(=('events' op) =('state' op))
+      =^  cards  full
+        (visitor-read:fc u.who =('events' op) eyre-id req u.target (get-header:http 'tab' args) (get-header:http 'visit' args))
+      [cards state]
+    ?.  |(=('open' op) =('close' op) =('activity' op))  [(give [[404 ~] ~]) state]
+    =/  kind=?(%open %close %activity)
+      ?:  =('open' op)  %open
+      ?:(=('close' op) %close %activity)
+    =^  cards  full  (visitor-tab:fc u.who kind eyre-id req u.target)
+    [cards state]
   ?.  =('GET' method.request.req)  [(give [[405 ~] ~]) state]
   ?:  |(=("/apps/manor/public/full/" (scag 24 pat)) =("/apps/manor/public/managed/" (scag 27 pat)))
     =/  fc  ~(. manor-pool [bowl full])

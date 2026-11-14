@@ -83,16 +83,75 @@ different remote ships can report the same internal Eyre port. Caddy checks
 cookie. Endpoint changes and agent upgrades require no active visitor
 claim or pending operation.
 
+Caddy uses fresh upstream HTTP connections for controller requests. This
+avoids stalled pooled Eyre connections observed during agent/gateway
+upgrades. Ship/app transports and long-lived event streams are unchanged;
+closing an event stream still cancels its upstream request.
+
 ## Reuse Policy
 
-Unlock is manual. There is **no idle eviction or automatic browser-close
-eviction**. Unused invitation links still expire after two minutes; that
-does not remove a visitor who has entered their ship.
+New Manor-assigned visits automatically unlock when the last tracked
+browser tab closes. Idle eviction is **off by default**; backgrounding a tab
+or losing its streaming connection does not count as closing it. Unused invitation links
+still expire after two minutes; that does not evict an entered visitor.
+
+The updated generated Caddyfile serves a small, full-window visitor wrapper
+on managed ship app pages. Apps and their traffic still go directly to the
+ship. The wrapper sends one open notification and a close beacon, with no
+heartbeat or periodic polling. App navigation and refresh do not release the ship;
+each top-level tab has a separate identity. Closing the last one starts a
+30-second grace period. Opening a new tab during that period cancels it.
+Only confirmed session revocation makes the ship free again. No apps,
+files, profiles or networking keys are erased or changed.
+
+Close signals and timers are bound to the current visit generation. Old
+tabs cannot unlock a newer visitor's reservation. A browser crash or an OS
+shutdown may not deliver a close signal, so manual **Unlock** remains the
+fallback. Failed or indeterminate revocation leaves the ship claimed.
+The page shows **closing**, then **unlocking**, then **free** as pushed
+updates.
+
+For optional idle eviction, enable **Auto-unlock idle visitors** under
+**Public access**, choose a limit (2-1440 minutes; suggested 15), and select
+**Save timeout**. A server-side Behn timer controls the visit. One minute
+before expiry, each tracked tab displays a countdown and **Stay connected**.
+Pointer, keyboard, touch and scrolling input in any same-origin app frame
+extends the shared deadline. App background work, incoming messages and
+voice calls without input do not count as activity. Cross-origin embedded
+pages cannot expose their input; use **Stay connected** when warned.
+
+Policy and ending events are pushed over an authenticated event stream.
+There is no heartbeat; input reports are throttled and a single state read
+checks expiry if a push was missed. Reconnecting the stream never extends
+a visit. Expiry asks connected, current wrappers to remove their app frames,
+requests Eyre session revocation, and holds the claim until that revocation
+is confirmed. This does not revoke credentials issued by external services.
+An offline ship or failed revocation remains unavailable for manual Unlock.
+
+Update Manor and reload the newly generated Caddyfile before enabling idle
+eviction. All open tabs must support the warning/activity protocol: old
+visitor tabs protect the visit from idle eviction until refreshed or closed.
+Upgrades preserve claims and close tracking, and start with idle disabled.
+Turning it off cancels pending idle timers without releasing visitors.
+
+Existing visits are not enrolled or evicted during upgrade. This feature
+starts with new assignments after updating Manor and reloading the generated
+Caddyfile. The optional virtual Theseus fleet keeps its existing manual
+release/reset behavior.
 
 Unlock signs out owner sessions and frees the claim only after revocation
 is confirmed. Apps, files, profiles and networking keys remain unchanged.
 Failed or indeterminate revocation keeps the claim held. Clearing visitor
 data is a separate reset operation, not Unlock.
+
+**Known limitations:** active movement has been reported to trigger an idle
+warning; leave idle eviction disabled for production use until verified in
+the relevant apps/browsers. A Free row is not proof that every previous app
+connection has ended. Glurff relay connections may outlive Eyre logout if
+the browser does not close them. App/service-side disconnection and old
+credential invalidation are separate integration work, not part of this
+release. Do not treat browser-wrapper cleanup as a security boundary for
+reassigning a ship to an untrusted visitor.
 
 **Remove** requires no reservation or pending work. For a retired ship
 that cannot answer Unlock, use **Forget ship** and confirm the warning.
@@ -108,10 +167,11 @@ picture files for independent ships are not added in this phase.
 
 ## Existing Installation
 
-State `%6` preserves Manor's existing `%0`-`%5` pools, claims, paired
+State `%8` preserves Manor's existing `%0`-`%7` pools, claims, paired
 controller, app catalogs and pending connection requests. Upgraded installs
 keep the Theseus visitor pool selected until the owner explicitly saves a
-different selection. Fresh installs start with managed ships and no public
+different selection. The `%6` upgrade also preserves the saved visitor-pool
+selection and does not start tracking existing visits. Fresh installs start with managed ships and no public
 address. Rows from
 `%2` retain the legacy companion transport until deliberately switched.
 This lets the controller update without disconnecting a running test.
@@ -177,7 +237,7 @@ only for the join address and the selected pool's registered ships.
 
 Visitors still receive an owner session on their dedicated ship, not an
 app-only sandbox. Unlock revokes sessions; it does not wipe apps, files or
-profiles. Automatic idle eviction is not performed.
+profiles. Idle eviction is optional and disabled until the owner enables it.
 
 ## Verification
 

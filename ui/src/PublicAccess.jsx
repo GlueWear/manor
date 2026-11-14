@@ -1,6 +1,7 @@
 import React, {useState} from 'react';
 import {Copy, Download, ExternalLink, Globe} from 'lucide-react';
 import {baseProblem, caddyfile, FRONT_DEFAULTS, frontProblem, managedCaddyfile, managedLocalCaddyfile, publicLink} from './model.mjs';
+import IdleSettings from './IdleSettings.jsx';
 
 const KEY = 'manor.front';
 function loadFront() {
@@ -78,6 +79,7 @@ export default function PublicAccess({manor, theseus, busy, run, notify, fail}) 
       </select></label>}
       <div className="tools"><button type="submit" className="primary" disabled={busy}>Save settings</button></div>
     </form>
+    {pool === 'ships' && <IdleSettings minutes={manor.managed?.idleMinutes || 0} busy={busy} run={run} fail={fail}/>}
     <div className="access-link"><span className="field-label">{local ? 'Local test address' : 'Public link'}</span>
       {link ? <a className="public-link" href={link} target="_blank" rel="noreferrer">{link}<ExternalLink size={14}/></a> : <span className="muted">No public address saved.</span>}
     </div>

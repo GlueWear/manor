@@ -1,0 +1,270 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="referrer" content="same-origin">
+<title>Manor</title>
+<style>
+html,body{margin:0;width:100%;height:100%;background:#fff;color:#213b33;font:16px system-ui,sans-serif;letter-spacing:0}
+iframe{display:block;border:0;width:100%;height:100%}
+main{position:absolute;inset:0;display:grid;place-content:center;gap:16px;padding:24px;text-align:center}
+main[hidden],iframe[hidden]{display:none}
+p{margin:0;max-width:400px;line-height:1.5}
+button{justify-self:center;padding:10px 20px;border:1px solid #b7c7bf;border-radius:4px;background:#fff;color:inherit;font:inherit;cursor:pointer}
+dialog{box-sizing:border-box;width:380px;max-width:calc(100% - 32px);max-height:90dvh;overflow:auto;border:1px solid #aabdaf;border-radius:6px;padding:28px;background:#f8faf8;color:#213b33}
+dialog::backdrop{background:rgb(10 25 20 / 55%)}
+dialog h1{font-size:22px;margin:0 0 16px}
+dialog p{margin-bottom:18px}
+dialog button{background:#245a45;color:#fff;border-color:#245a45;width:100%}
+progress{display:block;width:100%;height:8px;margin:0 0 20px;accent-color:#245a45}
+#warning-error{font-size:14px;color:#9d3232}
+[hidden]{display:none!important}
+</style>
+</head>
+<body>
+<main role="status"><p id="message">Opening your ship...</p><button type="button" id="retry" hidden>Try again</button><a id="gate" hidden>Return to the gate</a></main>
+<iframe title="Visitor ship" allow="camera; microphone; autoplay; clipboard-read; clipboard-write; fullscreen; display-capture" allowfullscreen hidden></iframe>
+<dialog aria-labelledby="warning-title" aria-describedby="warning-copy">
+<h1 id="warning-title">Still here?</h1>
+<p id="warning-copy">Your ship will be released in <output id="remaining">60</output> seconds.</p>
+<progress max="60" value="60" aria-label="Time remaining"></progress>
+<p id="warning-error" role="status" hidden></p>
+<button type="button" id="stay" autofocus>Stay connected</button>
+</dialog>
+<script>
+(() => {
+  const frame = document.querySelector('iframe');
+  const status = document.querySelector('main');
+  const message = document.querySelector('#message');
+  const retry = document.querySelector('#retry');
+  const gate = document.querySelector('#gate');
+  const warning = document.querySelector('dialog');
+  const stay = document.querySelector('#stay');
+  const remaining = document.querySelector('#remaining');
+  const progress = document.querySelector('progress');
+  const error = document.querySelector('#warning-error');
+  // Capture this visit once: a later assignment may replace the browser cookie.
+  const visit = document.cookie.split(';').map(x => x.trim()).find(x => x.startsWith('manor-visit-id='))?.slice('manor-visit-id='.length) || '';
+  let tab = '', generation = 0, leaving = false, ended = false, source;
+  let enabled = false, cutoff = Infinity, warnSeconds = 60;
+  let warningTimer, deadlineTimer, countdownTimer, activityTimer;
+  let lastReport = -Infinity, reporting = false, queuedStay = false;
+  let policyRevision = -1;
+  const observed = new WeakSet();
+  const identity = () => Array.from(crypto.getRandomValues(new Uint8Array(16)), b => b.toString(16).padStart(2, '0')).join('');
+  const payload = () => `${tab}:${visit}`;
+  const query = () => new URLSearchParams({tab, visit});
+  const headers = {'x-manor-client': '2'};
+
+  function clearTimers() {
+    for (const timer of [warningTimer, deadlineTimer, countdownTimer, activityTimer]) clearTimeout(timer);
+    activityTimer = null;
+  }
+
+  function end() {
+    if (ended) return;
+    ended = true;
+    leaving = true;
+    generation++;
+    source?.close();
+    clearTimers();
+    if (warning.open) warning.close();
+    frame.remove();
+    status.hidden = false;
+    message.textContent = 'Your visit has ended.';
+    retry.hidden = true;
+    const to = new URL('/', location.href);
+    to.hostname = 'join.' + location.hostname.slice(location.hostname.indexOf('.') + 1);
+    gate.href = to.href;
+    gate.hidden = false;
+  }
+
+  function countdown() {
+    if (!warning.open || ended || leaving) return;
+    const seconds = Math.max(0, Math.ceil((cutoff - performance.now()) / 1000));
+    remaining.value = String(seconds);
+    progress.max = warnSeconds;
+    progress.value = Math.min(warnSeconds, seconds);
+    countdownTimer = setTimeout(countdown, 1000);
+  }
+
+  function showWarning() {
+    if (!enabled || ended || leaving) return;
+    if (!warning.open) warning.showModal();
+    clearTimeout(countdownTimer);
+    countdown();
+  }
+
+  function policy(value) {
+    if (ended || leaving || !value || typeof value.enabled !== 'boolean' || !Number.isFinite(value.now)) return;
+    if (!Number.isSafeInteger(value.revision) || value.revision < policyRevision) return;
+    policyRevision = value.revision;
+    clearTimeout(warningTimer); clearTimeout(deadlineTimer); clearTimeout(countdownTimer);
+    enabled = value.enabled && Number.isFinite(value.expiresAt);
+    cutoff = enabled ? performance.now() + value.expiresAt - value.now : Infinity;
+    warnSeconds = value.warningSeconds || 60;
+    error.hidden = true;
+    if (!enabled) {
+      clearTimeout(activityTimer);
+      activityTimer = null;
+      if (warning.open) warning.close();
+      return;
+    }
+    const delay = Math.max(0, cutoff - performance.now());
+    if (delay <= warnSeconds * 1000) showWarning();
+    else {
+      if (warning.open) warning.close();
+      warningTimer = setTimeout(showWarning, delay - warnSeconds * 1000);
+    }
+    deadlineTimer = setTimeout(checkState, delay);
+  }
+
+  async function checkState() {
+    if (ended || leaving) return;
+    const expected = generation;
+    try {
+      const res = await fetch(`/~manor/visit/state?${query()}`, {credentials: 'same-origin', cache: 'no-store'});
+      if (expected !== generation || ended || leaving) return;
+      if ([401, 403, 409, 410].includes(res.status)) {end(); return;}
+      if (!res.ok) throw new Error();
+      const value = await res.json();
+      if (expected === generation) policy(value);
+    } catch {
+      if (expected === generation && !ended && !leaving && warning.open) {error.textContent = 'Could not reach your ship. Try Stay connected.'; error.hidden = false;}
+    }
+  }
+
+  function events() {
+    source?.close();
+    const expected = generation;
+    const stream = source = new EventSource(`/~manor/visit/events?${query()}`);
+    stream.addEventListener('policy', event => {if (expected === generation) {try {policy(JSON.parse(event.data));} catch {}}});
+    stream.addEventListener('ending', () => {if (expected === generation) end();});
+    stream.addEventListener('error', () => {
+      if (expected === generation && !ended && !leaving && stream.readyState === EventSource.CLOSED) checkState();
+    });
+  }
+
+  async function report(force = false) {
+    if (!enabled || ended || leaving) return;
+    if (reporting) {queuedStay ||= force; return;}
+    const expected = generation;
+    reporting = true;
+    clearTimeout(activityTimer);
+    activityTimer = null;
+    stay.disabled = true;
+    try {
+      const res = await fetch('/~manor/visit/activity', {method: 'POST', headers, body: payload(), credentials: 'same-origin', keepalive: true});
+      if (expected !== generation || ended || leaving) return;
+      if ([401, 403, 409, 410].includes(res.status)) {end(); return;}
+      if (!res.ok) throw new Error();
+      lastReport = performance.now();
+      const value = await res.json();
+      if (expected === generation) policy(value);
+    } catch {
+      if (expected === generation && warning.open) {error.textContent = 'Could not reach your ship. Try again.'; error.hidden = false;}
+    } finally {
+      if (expected === generation) {
+        reporting = false;
+        stay.disabled = false;
+        if (queuedStay) {queuedStay = false; report(true);}
+      }
+    }
+  }
+
+  function activity(event) {
+    if (!event.isTrusted || !enabled || warning.open || ended || leaving) return;
+    const wait = 15000 - (performance.now() - lastReport);
+    if (wait <= 0 || cutoff - performance.now() < (warnSeconds + 15) * 1000) report();
+    else if (!activityTimer) activityTimer = setTimeout(() => {activityTimer = null; report();}, wait);
+  }
+
+  function track(win) {
+    try {
+      const doc = win.document;
+      if (observed.has(doc)) return;
+      observed.add(doc);
+      for (const name of ['pointerdown', 'pointermove', 'keydown', 'input', 'wheel', 'touchstart']) doc.addEventListener(name, activity, {capture: true, passive: true});
+      const child = el => {el.addEventListener('load', () => track(el.contentWindow)); track(el.contentWindow);};
+      doc.querySelectorAll('iframe').forEach(child);
+      new MutationObserver(records => records.forEach(record => record.addedNodes.forEach(node => {
+        if (node.nodeType !== 1) return;
+        if (node.matches('iframe')) child(node);
+        node.querySelectorAll('iframe').forEach(child);
+      }))).observe(doc, {subtree: true, childList: true});
+    } catch { /* Cross-origin embeds cannot expose browser input. */ }
+  }
+
+  function close() {
+    if (!tab || leaving) return;
+    leaving = true;
+    generation++;
+    source?.close();
+    clearTimers();
+    const data = new Blob([payload()], {type: 'text/plain'});
+    let sent = false;
+    try { sent = navigator.sendBeacon('/~manor/visit/close', data); } catch {}
+    if (!sent) fetch('/~manor/visit/close', {method: 'POST', body: data, credentials: 'same-origin', keepalive: true}).catch(() => {});
+  }
+
+  async function open() {
+    leaving = false;
+    reporting = false;
+    queuedStay = false;
+    lastReport = -Infinity;
+    stay.disabled = false;
+    if (!tab) tab = identity();
+    const expected = ++generation;
+    retry.hidden = true;
+    message.textContent = 'Opening your ship...';
+    try {
+      const res = await fetch('/~manor/visit/open', {method: 'POST', headers, body: payload(), credentials: 'same-origin', keepalive: true});
+      if (expected !== generation || leaving) return;
+      if (!res.ok) {
+        if ([403, 409, 410].includes(res.status)) {end(); return;}
+        message.textContent = 'Your ship could not open. Try again.';
+        retry.hidden = [403, 409, 410].includes(res.status);
+        return;
+      }
+      const value = await res.json();
+      if (expected !== generation || ended || leaving) return;
+      policy(value);
+      events();
+      if (!frame.hasAttribute('src')) frame.src = location.href;
+      frame.hidden = false;
+      status.hidden = true;
+      track(frame.contentWindow);
+    } catch {
+      if (expected !== generation || leaving) return;
+      message.textContent = 'Could not reach your ship.';
+      retry.hidden = false;
+    }
+  }
+
+  retry.addEventListener('click', open);
+  stay.addEventListener('click', () => report(true));
+  warning.addEventListener('cancel', event => {event.preventDefault(); report(true);});
+  addEventListener('online', () => {if (!ended && !leaving) checkState();});
+  addEventListener('pagehide', close);
+  addEventListener('pageshow', event => {
+    if (!event.persisted) return;
+    tab = '';
+    frame.hidden = true;
+    status.hidden = false;
+    open();
+  });
+  frame.addEventListener('load', () => {
+    try {
+      const inner = frame.contentWindow;
+      if (inner.location.origin !== location.origin) return;
+      document.title = inner.document.title || 'Visitor ship';
+      if (inner.location.href !== location.href) history.replaceState(null, '', inner.location.href);
+      track(inner);
+    } catch { /* External app pages keep their own origin. */ }
+  });
+  open();
+})();
+</script>
+</body>
+</html>

@@ -33,6 +33,7 @@ test('managed ships stay unavailable while working, reserved or after an uncerta
   assert.equal(managedShipStatus({...row, fault: 'Profile update failed', claim: {entered: 1}}).label, 'needs attention');
   assert.equal(managedShipStatus({...row, online: false}).key, 'offline');
   assert.equal(managedShipStatus({...row, claim: {entered: 1}}).key, 'in-use');
+  assert.equal(managedShipStatus({...row, claim: {entered: 1}, autoUnlockAt: 123}).label, 'closing');
   assert.equal(managedShipStatus({...row, claim: {expires: 1}}).key, 'link-sent', 'no automatic release when a claim ages');
 });
 
@@ -67,6 +68,29 @@ test('ship input is broadly structural ASCII, not phonetic or moon-only', () => 
   for (const ship of ['~zod', '~siglup', '~siglup-narwet', '~pilfep-sicted-mignes-magtel', '~doznec-salfun-naptul-habrys--disseb-lissur-dopmet-padrum', '~abcdef-ghijkl']) assert.equal(shipProblem(ship), null, ship);
   for (const ship of ['zod', '~', '~ZOD', '~zod\nhandle', '~zod;foo', '~zod/../../', '~zód', '~zod---zod', '~zod.', '~{env.HOME}']) assert.ok(shipProblem(ship), ship);
   assert.equal(normalizeShip(' zod '), '~zod');
+});
+
+test('controller requests use fresh Eyre connections without changing ship transports', async t => {
+  const {execFileSync} = await import('node:child_process');
+  try {execFileSync('caddy', ['version'], {stdio: 'pipe'});} catch {t.skip('Caddy is not installed'); return;}
+  const text = managedCaddyfile({ship: '~siglup-narwet', eyre: 8083, ships: [{ship: '~zod', port: 8101}], base: 'example.test'});
+  const adapted = JSON.parse(execFileSync('caddy', ['adapt', '--config', '-', '--adapter', 'caddyfile'], {input: text, stdio: ['pipe', 'pipe', 'pipe']}).toString());
+  let controllers = 0, ships = 0;
+  function visit(node) {
+    if (!node || typeof node !== 'object') return;
+    if (node.handler === 'reverse_proxy') {
+      if (node.upstreams[0].dial === '127.0.0.1:8083') {
+        controllers++;
+        assert.equal(node.transport.keep_alive.enabled, false);
+      } else {
+        ships++;
+        assert.equal(node.transport?.keep_alive, undefined);
+      }
+    }
+    Object.values(node).forEach(visit);
+  }
+  visit(adapted);
+  assert.ok(controllers > 0 && ships > 0);
 });
 
 test('public managed Caddyfile uses exact registered hosts, safe logging and a local admin', async () => {

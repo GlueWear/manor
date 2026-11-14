@@ -27,7 +27,7 @@ const reset = () => {
     pool: [A, B, C].map(ship => ({ship, snapshot: '/hosting-reset', claim: null})),
     log: [{at: now - 60_000, text: 'Connected fleet hosting: 3 moons.'}],
     front: null, host, eyre: 8083,
-    managed: {localOnly: true, ships: []},
+    managed: {localOnly: true, ships: [], idleMinutes: 0},
     pairRequests: [],
     controlled: {controller: null, landing: 'landscape', required: ['landscape'], ready: true, busy: false, profile: null, apps: installedApps()},
   };
@@ -113,6 +113,10 @@ function apply(action) {
     }
     manor.settings = {base: value.base, landing: value.landing};
     log('Settings saved.');
+  } else if (kind === 'idle-policy') {
+    if (!Number.isInteger(value.minutes) || (value.minutes !== 0 && (value.minutes < 2 || value.minutes > 1440))) return 'bad idle policy';
+    manor.managed.idleMinutes = value.minutes;
+    log('Visitor idle policy updated.');
   } else if (kind === 'pair') {
     if (value.controller !== null && (shipProblem(value.controller) || value.controller === host)) return 'bad controller';
     manor.controlled.controller = value.controller;
@@ -196,6 +200,7 @@ export const mockServer = createServer(async (req, res) => {
     if (data.pairRequests) manor.pairRequests = data.pairRequests;
     if (data.controlled) Object.assign(manor.controlled, data.controlled);
     if (data.visitorPool) manor.visitorPool = data.visitorPool;
+    if ('idleMinutes' in data) manor.managed.idleMinutes = data.idleMinutes;
     if ('profileFailure' in data) profileFailure = data.profileFailure;
     signal('state'); return res.end('ok');
   }

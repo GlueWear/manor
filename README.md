@@ -5,7 +5,7 @@ A visitor pool for Urbit ships, with optional
 Share one link. A visitor passes a (silly) proof-of-human page, gets a ship
 from your pool, and lands in it already logged in at an app you choose,
 such as Glurff. They never see the ship's `+code`. Independent ships are
-manually unlocked for reuse; virtual Theseus fleets can also be reset to
+automatically unlocked after the last tracked visitor tab closes; virtual Theseus fleets can also be reset to
 a clean snapshot. Unlock does not erase visitor data.
 
 Manor is an Urbit app, `%manor`, installed on the controller and the
@@ -43,7 +43,11 @@ pairing grants control; a ship may have both roles. Galaxies, stars, planets,
 moons and comets can be registered, without a parent-child relationship.
 The managed pool has manual Unlock, Noltbook name/picture-URL controls,
 landing-app configuration and local/HTTPS/tunnel endpoint settings. There is
-no idle eviction or automatic browser-close eviction.
+no idle eviction unless the owner enables **Auto-unlock idle visitors** in
+**Public access**. Its suggested limit is 15 minutes, with a one-minute
+warning and **Stay connected** button. Real input in any tracked app tab
+extends the whole visit. New Manor-assigned managed visits also unlock
+after the last tab closes, with a 30-second reconnect grace period.
 
 The page opens on **Ships**. Each ship's settings button selects its
 landing app from that ship's running web apps. Extra readiness dependencies
@@ -74,6 +78,17 @@ See [ops/MANAGED-SHIPS.md](ops/MANAGED-SHIPS.md) for deployment, migration,
 local testing and public HTTPS setup. Upgrades preserve the existing
 visitor pool until explicitly changed. Visitor sessions are ship-owner
 sessions, not an app-only sandbox; reuse does not erase visitor data.
+
+### Current Limits
+
+- Idle eviction is optional and off by default. Active movement has been
+  reported to trigger a warning; keep it disabled for production use until
+  activity tracking is verified with the apps and browsers you host.
+- **Free** confirms that Manor released the claim after Eyre logout. It does
+  not confirm termination of independently authenticated app connections,
+  such as an existing Glurff relay session. Connected, current visitor
+  wrappers close their app frames, but old or non-cooperating pages may not.
+  Full visitor isolation requires app/service-side session revocation too.
 
 The optional `./manor ship` supervisor manages independent Vere processes.
 Its older `./manor moon` spelling remains an alias; existing jobs and piers

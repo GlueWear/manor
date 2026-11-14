@@ -6,6 +6,10 @@
 ?>  =(~ noun:grow.notice)
 =/  mark  ~(. action-mark *action:manor)
 =/  decode  json:grab.mark
+~|  %idle-policy-json-uses-integer-minutes
+?>  =([%idle-policy 15] (decode (need (de:json:html '{"idle-policy":{"minutes":15}}'))))
+?>  =([%idle-policy 0] (decode (need (de:json:html '{"idle-policy":{"minutes":0}}'))))
+?>  =(~ (mole |.((decode (need (de:json:html '{"idle-policy":{"minutes":"15"}}'))))))
 ~|  %hosting-selects-a-known-visitor-pool
 ?>  =([%hosting 'glurff.com' '/apps/glurff/' %ships] (decode (need (de:json:html '{"hosting":{"base":"glurff.com","landing":"/apps/glurff/","pool":"ships"}}'))))
 ?>  =(~ (mole |.((decode (need (de:json:html '{"hosting":{"base":"glurff.com","landing":"/apps/glurff/","pool":"other"}}'))))))

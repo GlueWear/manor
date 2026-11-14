@@ -39,7 +39,7 @@ class UnifiedSourceTests(unittest.TestCase):
         app = (self.root / "desk/app/manor.hoon").read_text()
         self.assertIn("(pair-request:hc src.bowl)", app)
         self.assertIn("(gte ~(wyt by pair-requests) 64)", app)
-        self.assertIn("%6  got", app)
+        self.assertIn("%8  got", app)
         local = (self.root / "desk/lib/manor-ship.hoon").read_text()
         watches = local.split("++  watches\n", 1)[1].split("++  port\n", 1)[0]
         self.assertNotIn("announce", watches)
@@ -64,12 +64,16 @@ class UnifiedSourceTests(unittest.TestCase):
         self.assertNotIn("[%state ~]", code)
         self.assertIn("?>  =(src.bowl our.bowl)", code)
 
-    def test_no_idle_or_close_eviction_scheduler(self):
+    def test_close_and_optional_idle_use_separate_generation_safe_timers(self):
         code = (self.root / "desk/lib/manor-pool.hoon").read_text()
         self.assertNotIn("last-active", code)
         self.assertNotIn("idle-timeout", code)
         self.assertNotIn("%theseus-recycle", code)
         self.assertIn("%wait deadline", code)
+        self.assertIn("/visit-idle/", code)
+        self.assertIn("/visit-close/", code)
+        self.assertIn("=(revision idle-revision.u.v)", code)
+        self.assertIn("=(tabs.v idle-tabs.v)", code)
 
     def test_status_refresh_retires_existing_wires_before_rewatching(self):
         code = (self.root / "desk/lib/manor-pool.hoon").read_text()

@@ -149,6 +149,7 @@ export function managedShipStatus(row) {
   if (row.fault) return {key: 'failed', label: row.blocked ? 'unlock needed' : 'needs attention', tone: 'bad', detail: row.fault};
   if (!row.online) return {key: 'offline', label: 'not connected', tone: 'warn'};
   if (row.blocked) return {key: 'blocked', label: 'unlock needed', tone: 'warn'};
+  if (row.claim && row.autoUnlockAt) return {key: 'closing', label: 'closing', tone: 'busy'};
   if (row.claim?.entered) return {key: 'in-use', label: 'in use', tone: 'used'};
   if (row.claim) return {key: 'link-sent', label: 'reserved', tone: 'used'};
   return row.ready ? {key: 'free', label: 'free', tone: 'ok'} : {key: 'starting', label: 'getting ready', tone: 'busy'};
@@ -183,6 +184,10 @@ function managedTargets({ship, eyre, ships, ports}) {
     return {...row, target: endpoint};
   });
 }
+// Keep controller requests off stale pooled Eyre connections after agent reloads.
+const controllerTransport = `transport http {
+          keepalive off
+        }`;
 function managedShipRoutes(targets, eyre, suffix) {
   const proxy = (row, cookie) => {
     const {host, port, secure} = row.target;
@@ -199,6 +204,30 @@ function managedShipRoutes(targets, eyre, suffix) {
           health_fails 3
         }`;
   };
+  const visitor = (row, i) => [
+    {name: 'Open', path: '/~manor/visit/open', tail: '/open'},
+    {name: 'Close', path: '/~manor/visit/close', tail: '/close'},
+    {name: 'Activity', path: '/~manor/visit/activity', tail: '/activity'},
+    {name: 'Events', path: '/~manor/visit/events', tail: '/events'},
+    {name: 'State', path: '/~manor/visit/state', tail: '/state'},
+    {name: 'Page', tail: ''},
+  ].map(({name, path, tail}) => `
+    @visit${i}${name} {
+      ${path ? `path ${path}` : 'method GET\n      path / /apps/*\n      header Sec-Fetch-Dest document'}
+      header_regexp visit${i}${name} Cookie "(?:^|;[ ]*)(manor-visit=[^;]+)(?:;|$)"
+    }
+    handle @visit${i}${name} {
+      rewrite * /apps/manor/public/managed/visit/${row.ship}${tail}
+      reverse_proxy 127.0.0.1:${eyre} {
+        header_up Host localhost:${eyre}
+        header_up X-Forwarded-Host {hostport}
+        header_up Cookie {re.visit${i}${name}.1}
+        header_up -Authorization
+        header_up -Proxy-Authorization
+        ${controllerTransport}
+        ${name === 'Page' ? 'header_down Cache-Control no-store\n        header_down Vary "Sec-Fetch-Dest, Cookie"' : ''}
+      }
+    }`).join('\n');
   return targets.map((row, i) => `
   @ship${i} host ${row.ship.slice(1)}.${suffix}
   handle @ship${i} {
@@ -210,8 +239,10 @@ function managedShipRoutes(targets, eyre, suffix) {
         header_up -Cookie
         header_up -Authorization
         header_up -Proxy-Authorization
+        ${controllerTransport}
       }
     }
+${visitor(row, i)}
     handle {
       @cookie${i} header_regexp own${i} Cookie "(?:^|;[ ]*)(urbauth-${row.ship}=[^;]+)(?:;|$)"
       handle @cookie${i} {
@@ -262,6 +293,7 @@ http://:${port} {
         header_up Host localhost:${eyre}
         header_up X-Forwarded-Host {hostport}
         header_up -Cookie
+        ${controllerTransport}
       }
     }
     @gate path / /gate/ /trolley.png
@@ -271,6 +303,7 @@ http://:${port} {
         header_up Host localhost:${eyre}
         header_up X-Forwarded-Host {hostport}
         header_up -Cookie
+        ${controllerTransport}
       }
     }
     handle {
@@ -305,6 +338,7 @@ export function managedCaddyfile({ship, eyre, ships, base, httpsPort = 8443, loc
         header_up -Cookie
         header_up -Authorization
         header_up -Proxy-Authorization
+        ${controllerTransport}
         health_uri /~/host
         health_body "^${ship}$"
         health_interval 10s

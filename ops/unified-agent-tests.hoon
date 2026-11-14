@@ -17,7 +17,7 @@
     -:!<(response-header:http +.+.+.+.c)
   $(cards t.cards)
 =/  saved
-  $:  %6
+  $:  %8
       pool=(map ship path)
       fleet=(unit [name=@tas snapshot=path])
       claims=(map ship claim:manor)
@@ -152,6 +152,15 @@
 ?>  =(%ships visitor-pool.state)
 ?>  =('glurff.com' base.settings.state)
 ?>  =(claims claims.state)
+~|  %state-six-keeps-public-selection-without-tracking-existing-visitors
+=/  prior-full=managed-pool-6:manor
+  [ships.full.state claims.full.state requests.full.state serial.full.state apps.full.state]
+=/  old-six  !>([%6 pool.state fleet.state claims.state settings.state log.state front.state prior-full controlled.state pair-requests.state visitor-pool.state])
+=/  from-six  +:(on-load.configured-host old-six)
+=/  reloaded-state  !<(saved on-save.from-six)
+?>  =(%ships visitor-pool.reloaded-state)
+?>  =(claims.full.state claims.full.reloaded-state)
+?>  =(~ visits.full.reloaded-state)
 ~|  %public-certificates-only-cover-the-selected-pool
 ?>  =(200 (tls-status configured-host 'join.glurff.com'))
 ?>  =(200 (tls-status configured-host 'nolset.glurff.com'))
@@ -204,9 +213,34 @@
 ?>  =(%glurff landing.controlled.state)
 ?>  =(pool pool.state)
 ?>  (~(has by ships.full.state) ~nolset)
-~|  %state-six-reload-keeps-both-roles
+~|  %state-seven-reload-keeps-both-roles
 =/  reloaded  +:(on-load.paired on-save.paired)
 =/  state  !<(saved on-save.reloaded)
 ?>  =(`~zod controller.controlled.state)
 ?>  (~(has by ships.full.state) ~nolset)
+~|  %state-seven-reload-preserves-tab-membership-and-close-deadlines
+=/  held-claim=claim:manor  [now.b ~ ~ `now.b]
+=/  visit=visitor:manor  [now.b (sham 'fixture-proof') ~ ~ `(add now.b ~s30) 3 ~ ~ 0 ~]
+=/  next-full  full.state(claims (~(put by claims.full.state) ~nolset held-claim), visits (~(put by visits.full.state) ~nolset visit))
+=/  restored  +:(on-load.reloaded !>(state(full next-full)))
+=/  next  !<(saved on-save.restored)
+?>  =(visits.next-full visits.full.next)
+?>  =(held-claim (~(got by claims.full.next) ~nolset))
+~|  %state-seven-migration-retains-close-tracking-but-starts-with-idle-disabled
+=/  legacy-visit=visitor-7:manor  [now.b (sham 'fixture-proof') (silt `(list @ta)`~[~.tab-one]) (silt `(list @ta)`~[~.tab-one]) ~ 4]
+=/  legacy-full=managed-pool-7:manor
+  [ships.next-full claims.next-full requests.next-full serial.next-full apps.next-full (~(put by *(map ship visitor-7:manor)) ~nolset legacy-visit)]
+=/  legacy  !>([%7 pool.state fleet.state claims.state settings.state log.state front.state legacy-full controlled.state pair-requests.state visitor-pool.state])
+=/  upgraded  +:(on-load.restored legacy)
+=/  next  !<(saved on-save.upgraded)
+=/  visit  (~(got by visits.full.next) ~nolset)
+?>  =(0 idle-minutes.full.next)
+?>  =(tabs.legacy-visit tabs.visit)
+?>  =(~ idle-tabs.visit)
+?>  =(~ idle-at.visit)
+~|  %only-the-owner-can-enable-idle-eviction
+?>  =(~ (mole |.((on-poke.peer %manor-action !>(`action:manor`[%idle-policy 15])))))
+?>  =(~ (mole |.((on-poke.upgraded %manor-action !>(`action:manor`[%idle-policy 1])))))
+=/  enabled  +:(on-poke.upgraded %manor-action !>(`action:manor`[%idle-policy 15]))
+?>  =(15 idle-minutes.full:!<(saved on-save.enabled))
 0

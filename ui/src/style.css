@@ -213,6 +213,10 @@ dialog h2 { min-width: 0; overflow-wrap: anywhere; }
 dialog label { display: block; margin: 14px 0; font-size: 12px; font-weight: 550; }
 dialog p { font-size: 13px; line-height: 1.7; color: var(--ink-2); }
 .form-error { margin-top: 12px; color: var(--bad) !important; }
+.idle-settings { display: grid; gap: 14px; margin: 22px 0; padding-top: 20px; border-top: 1px solid var(--line); }
+.idle-settings .front-fields { margin: 0; }
+.idle-settings button { justify-self: start; }
+.idle-settings output { display: block; padding: 10px 0; }
 .forget-option { margin-top: 14px; }
 .dialog-actions { display: flex; justify-content: flex-end; gap: 8px; margin-top: 22px; }
 

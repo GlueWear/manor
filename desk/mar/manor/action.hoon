@@ -14,6 +14,7 @@
         [%remove (ot ~[ships+(ar (se %p))])]
         [%settings (ot ~[base+so landing+so])]
         [%hosting (ot ~[base+so landing+so pool+(su (perk %ships %theseus ~))])]
+        [%idle-policy (ot ~[minutes+ni])]
         [%full-add (ot ~[who+(se %p)])]
         [%full-remove (ot ~[who+(se %p)])]
         [%full-unlock (ot ~[who+(se %p)])]
