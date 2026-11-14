@@ -84,27 +84,29 @@ test('connecting a fleet offers only snapshots that hold all its moons', async (
 
 test('settings are checked before saving and give the public link', async ({page}) => {
   await page.goto('/');
-  await expect(page.locator('.card').first()).toContainText('No public address yet');
+  const access = page.getByRole('region', {name: 'Public access'});
+  await expect(access).toContainText('No public address saved');
   await page.getByLabel('Public address').fill('Not A Host');
   await page.getByRole('button', {name: 'Save settings'}).click();
   await expect(page.getByRole('alert')).toContainText('lowercase');
   await page.getByLabel('Public address').fill('203-0-113-7.nip.io');
-  await page.getByLabel('Landing page').fill('/apps/glurff/');
+  await page.getByLabel('Fleet landing app').selectOption('/apps/glurff/');
   await page.getByRole('button', {name: 'Save settings'}).click();
   await expect(page.locator('.public-link')).toHaveText('https://join.203-0-113-7.nip.io/');
-  await expect(page.locator('.card').first()).toContainText('land in /apps/glurff/');
+  await expect(page.getByLabel('Fleet landing app')).toHaveValue('/apps/glurff/');
 });
 
-test('the front door gives this ship a Caddyfile once the address is set', async ({page}) => {
+test('public access gives one visible Caddy download with advanced connection settings', async ({page}) => {
   await page.goto('/');
-  const front = page.getByRole('region', {name: 'Front door'});
-  await expect(front).toContainText('Set the public address under Settings first');
-  await expect(front).toContainText('No visits through it yet.');
+  const front = page.getByRole('region', {name: 'Public access'});
+  await expect(front).toContainText('Save a public address first');
   await page.getByLabel('Public address').fill('203-0-113-7.nip.io');
   await page.getByRole('button', {name: 'Save settings'}).click();
   await expect(front.getByRole('button', {name: 'Download Caddyfile'})).toBeVisible();
+  await expect(front.getByRole('button', {name: 'Download Caddyfile'})).toBeEnabled();
+  await front.getByText('Connection settings', {exact: true}).click();
   await front.getByLabel('HTTPS port').fill('9443');
-  await front.locator('summary').click();
+  await front.getByText('Show Caddyfile', {exact: true}).click();
   const config = front.getByTestId('caddyfile');
   await expect(config).toContainText('https_port 9443');
   await expect(config).toContainText('import routes join.203-0-113-7.nip.io');
@@ -123,7 +125,8 @@ test('the front door gives this ship a Caddyfile once the address is set', async
   await front.getByLabel('Test port').fill('8090');
   // this browser remembers the options
   await page.reload();
-  await expect(page.getByRole('region', {name: 'Front door'}).getByLabel('HTTPS port')).toHaveValue('9443');
+  await page.getByRole('region', {name: 'Public access'}).getByText('Connection settings', {exact: true}).click();
+  await expect(page.getByRole('region', {name: 'Public access'}).getByLabel('HTTPS port')).toHaveValue('9443');
 });
 
 test('moons show their full names, and Noltbook names and pictures that can be edited', async ({page, request}) => {
@@ -216,4 +219,40 @@ test('fits a phone', async ({page}) => {
   expect(await page.locator('.table-wrap').evaluate(el => el.scrollWidth <= el.clientWidth)).toBeTruthy();
   await expect(row(page, '~ritdex-sorled').locator('.mobile-status .badge')).toHaveText('in use');
   await page.screenshot({path: 'test-results/manor-mobile.png', fullPage: true});
+});
+
+test('managed ships connect and unlock separately from the public Theseus fleet', async ({page, request}) => {
+  await page.goto('/');
+  const pool = page.getByRole('region', {name: /^Ships\b/});
+  await expect(pool).toContainText('No managed ships connected');
+  const ship = '~pilfep-sicted-mignes-magtel';
+  await request.post(`${MOCK}/managed-fixture`, {data: {pairRequests: [{ship, at: Date.now()}]}});
+  await pool.getByRole('button', {name: `Approve ${ship}`}).click();
+  await page.getByRole('dialog').getByRole('button', {name: 'Approve', exact: true}).click();
+  await expect(row(page, ship)).toContainText('unlock needed');
+  await expect(row(page, ship)).toContainText('127.0.0.1:8101');
+  await row(page, ship).getByRole('button', {name: `Unlock ${ship}`}).click();
+  await page.getByRole('dialog').getByRole('button', {name: 'Unlock', exact: true}).click();
+  await expect(row(page, ship)).toContainText('unlocking');
+  await expect(row(page, ship).getByRole('button', {name: `Unlock ${ship}`})).toBeDisabled();
+  await expect(row(page, ship)).toContainText('free');
+  await expect(row(page, '~ritdex-sorled').locator('.status-col .badge')).toHaveText('in use');
+  const access = page.getByRole('region', {name: 'Public access'});
+  await access.getByLabel('Visitor pool').selectOption('ships');
+  await access.getByRole('button', {name: 'Save settings'}).click();
+  await access.getByText('Show Caddyfile', {exact: true}).click();
+  await expect(access.getByTestId('caddyfile')).toContainText('reverse_proxy 127.0.0.1:8101');
+  const download = page.waitForEvent('download');
+  await access.getByRole('button', {name: 'Download Caddyfile'}).click();
+  expect((await download).suggestedFilename()).toBe('Caddyfile.managed-local');
+  const pokes = await (await request.get(`${MOCK}/pokes`)).json();
+  expect(pokes.map(p => p.kind)).toEqual(['ship-approve', 'ship-unlock', 'hosting']);
+  expect(pokes[0].value).toEqual({who: ship, endpoint: null});
+  await page.screenshot({path: 'test-results/manor-managed-pool.png', fullPage: true});
+  await page.setViewportSize({width: 390, height: 844});
+  await pool.scrollIntoViewIfNeeded();
+  await expect(pool).toBeVisible();
+  expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBeTruthy();
+  expect(await pool.locator('.table-wrap').evaluate(el => el.scrollWidth <= el.clientWidth)).toBeTruthy();
+  await pool.screenshot({path: 'test-results/manor-managed-pool-mobile.png'});
 });

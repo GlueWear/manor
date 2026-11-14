@@ -17,7 +17,7 @@ export function shortMoon(ship, host) {
 // to Noltbook from the moon's own origin, with its version in the address so
 // a new upload isn't hidden behind the old one in a cache. '' for none.
 export function avatarSrc(avatar, origin, ship) {
-  const url = typeof avatar?.url === 'string' ? avatar.url.trim() : '';
+  const url = typeof avatar === 'string' ? avatar.trim() : typeof avatar?.url === 'string' ? avatar.url.trim() : '';
   if (/^https?:\/\//i.test(url)) return url;
   if (origin === undefined) return '';
   if (url.startsWith('/')) return `${origin}${url}`;
@@ -119,7 +119,260 @@ export const publicLink = base => base ? `https://join.${base}/` : null;
 export function validateState(data) {
   const ok = data && Array.isArray(data.pool) && Array.isArray(data.log) && typeof data.settings?.base === 'string' && typeof data.settings?.landing === 'string';
   if (!ok) throw new Error('Manor returned an unexpected state.');
+  if (data.pairRequests !== undefined && (!Array.isArray(data.pairRequests) || !data.pairRequests.every(row => row && !shipProblem(row.ship) && Number.isSafeInteger(row.at) && row.at >= 0 && row.at <= 8.64e15))) throw new Error('Manor returned invalid connection requests.');
+  const validApps = apps => apps == null || (Array.isArray(apps) && apps.every(app => app && typeof app.desk === 'string' && /^[a-z][a-z0-9-]*$/.test(app.desk) && typeof app.running === 'boolean' && typeof app.web === 'boolean'));
+  if (!validApps(data.controlled?.apps) || !(data.managed?.ships || []).every(row => validApps(row.apps))) throw new Error('Manor returned an invalid app list.');
   return data;
+}
+
+// Structural filtering only; %manor's /%p parser is authoritative.
+export const shipProblem = ship => typeof ship === 'string' && /^~[a-z]{3,6}(?:-{1,2}[a-z]{3,6}){0,7}$/.test(ship) ? null : 'Enter an Urbit ship name, like ~zod or ~siglup-narwet.';
+export const normalizeShip = value => `~${value.trim().replace(/^~/, '')}`;
+export const validPort = port => Number.isInteger(port) && port > 0 && port <= 65535;
+export function appConfigProblem({landing, required}) {
+  const term = value => typeof value === 'string' && /^[a-z][a-z0-9-]*$/.test(value);
+  if (!term(landing)) return 'Use an app name for the landing app, like landscape or glurff.';
+  if (!Array.isArray(required) || !required.every(term)) return 'Use app names separated by commas for required apps.';
+  if (new Set(required).size !== required.length) return 'List each required app only once.';
+  return null;
+}
+export function externalAvatarProblem(value) {
+  try {
+    const url = new URL(value);
+    if (['http:', 'https:'].includes(url.protocol) && url.hostname && !url.username && !url.password && !/\s/.test(value)) return null;
+  } catch { /* not a URL */ }
+  return 'Use an external picture address starting with https:// or http://.';
+}
+
+export function managedShipStatus(row) {
+  if (row.pending) return {key: 'working', label: {revoke: 'unlocking', session: 'logging in', profile: 'saving profile'}[row.pending] || 'working', tone: 'busy'};
+  if (row.fault) return {key: 'failed', label: row.blocked ? 'unlock needed' : 'needs attention', tone: 'bad', detail: row.fault};
+  if (!row.online) return {key: 'offline', label: 'not connected', tone: 'warn'};
+  if (row.blocked) return {key: 'blocked', label: 'unlock needed', tone: 'warn'};
+  if (row.claim?.entered) return {key: 'in-use', label: 'in use', tone: 'used'};
+  if (row.claim) return {key: 'link-sent', label: 'reserved', tone: 'used'};
+  return row.ready ? {key: 'free', label: 'free', tone: 'ok'} : {key: 'starting', label: 'getting ready', tone: 'busy'};
+}
+export const fullMoonStatus = managedShipStatus;
+export const managedRemovalKind = row => row.claim || row.pending ? 'ship-forget' : 'ship-remove';
+
+// Only literal hostnames/IPs reach the Caddyfile, never URLs or directives.
+export function managedEndpoint(row) {
+  const endpoint = row.endpoint ?? {host: '127.0.0.1', port: row.port, secure: false};
+  const {host, port, secure} = endpoint;
+  const labels = typeof host === 'string' ? host.split('.') : [];
+  const validHost = labels.length && host.length <= 253 && labels.every(label => /^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$/i.test(label));
+  const validIp = !/^[0-9.]+$/.test(host) || (labels.length === 4 && labels.every(label => /^(0|[1-9][0-9]{0,2})$/.test(label) && +label <= 255));
+  if (!validHost || !validIp || !validPort(port) || typeof secure !== 'boolean') throw new Error('Use a valid endpoint hostname and port (1-65535). Do not include a URL or path.');
+  const normalized = host.toLowerCase();
+  const loopback = ['localhost', '127.0.0.1'].includes(normalized);
+  if (!secure && !loopback) throw new Error('Remote endpoints require HTTPS. HTTP is allowed only for localhost or 127.0.0.1 tunnels.');
+  return {host: normalized, port, secure, key: `${loopback ? '127.0.0.1' : normalized}:${port}`};
+}
+
+function managedTargets({ship, eyre, ships, ports}) {
+  if (shipProblem(ship) || !validPort(eyre)) throw new Error('Invalid controller address.');
+  const endpoints = new Set([`127.0.0.1:${eyre}`, ...ports.map(port => `127.0.0.1:${port}`)]);
+  const identities = new Set([ship]);
+  return ships.map(row => {
+    if (shipProblem(row.ship) || identities.has(row.ship)) throw new Error('Use a unique Urbit identity for each managed ship.');
+    identities.add(row.ship);
+    const endpoint = managedEndpoint(row);
+    if (endpoints.has(endpoint.key)) throw new Error('Each ship needs a unique effective endpoint, distinct from the controller and preview listener.');
+    endpoints.add(endpoint.key);
+    return {...row, target: endpoint};
+  });
+}
+function managedShipRoutes(targets, eyre, suffix) {
+  const proxy = (row, cookie) => {
+    const {host, port, secure} = row.target;
+    return `reverse_proxy ${secure ? 'https://' : ''}${host}:${port} {
+          header_up Host ${host}:${port}
+          header_up X-Forwarded-Host {hostport}
+          header_up -Authorization
+          header_up -Proxy-Authorization
+          ${cookie ? `header_up Cookie ${cookie}` : 'header_up -Cookie'}
+          health_uri /~/host
+          health_body "^${row.ship}$"
+          health_interval 10s
+          health_timeout 10s
+          health_fails 3
+        }`;
+  };
+  return targets.map((row, i) => `
+  @ship${i} host ${row.ship.slice(1)}.${suffix}
+  handle @ship${i} {
+    handle /~manor/enter {
+      rewrite * /apps/manor/public/managed/enter/${row.ship}?{query}
+      reverse_proxy 127.0.0.1:${eyre} {
+        header_up Host localhost:${eyre}
+        header_up X-Forwarded-Host {hostport}
+        header_up -Cookie
+        header_up -Authorization
+        header_up -Proxy-Authorization
+      }
+    }
+    handle {
+      @cookie${i} header_regexp own${i} Cookie "(?:^|;[ ]*)(urbauth-${row.ship}=[^;]+)(?:;|$)"
+      handle @cookie${i} {
+        ${proxy(row, `{re.own${i}.1}`)}
+      }
+      handle {
+        ${proxy(row)}
+      }
+    }
+  }`).join('\n');
+}
+const privateLogs = `log default {
+    format filter {
+      wrap json
+      fields {
+        request>uri delete
+        request>headers delete
+        resp_headers delete
+      }
+    }
+  }`;
+
+// This config has no public listener and never routes through Theseus.
+export function managedLocalCaddyfile({ship, eyre, ships, port = 8091}) {
+  if (!validPort(port) || port < 1024 || port === eyre) throw new Error('Invalid local preview address. Use a test port from 1024 to 65535.');
+  const targets = managedTargets({ship, eyre, ships, ports: [port]});
+  const routes = managedShipRoutes(targets, eyre, 'localhost');
+  return `# Manor managed ships LOCAL trial. No public listener, inbound TLS or admin port.
+# Does not replace the production Caddyfile or public Theseus pool.
+# http://join.localhost:${port}/
+{
+  admin off
+  auto_https off
+  grace_period 5s
+  ${privateLogs}
+}
+http://:${port} {
+  bind 127.0.0.1
+  @escape path_regexp (^|/)\\.\\.(/|$)|%2[eE]
+  handle @escape {
+    respond 400
+  }
+  @join host join.localhost
+  handle @join {
+    handle /assign {
+      rewrite * /apps/manor/public/managed/assign
+      reverse_proxy 127.0.0.1:${eyre} {
+        header_up Host localhost:${eyre}
+        header_up X-Forwarded-Host {hostport}
+        header_up -Cookie
+      }
+    }
+    @gate path / /gate/ /trolley.png
+    handle @gate {
+      rewrite * /apps/manor/public{uri}
+      reverse_proxy 127.0.0.1:${eyre} {
+        header_up Host localhost:${eyre}
+        header_up X-Forwarded-Host {hostport}
+        header_up -Cookie
+      }
+    }
+    handle {
+      respond 404
+    }
+  }
+${routes}
+  handle {
+    respond 404
+  }
+  handle_errors 502 503 504 {
+    header Cache-Control no-store
+    respond "Your ship is busy or restarting. Try again shortly." 503
+  }
+}
+`;
+}
+// Compatibility for callers of the previous local-only generator.
+export const fullLocalCaddyfile = options => managedLocalCaddyfile({...options, ships: options.ships ?? options.moons});
+
+export function managedCaddyfile({ship, eyre, ships, base, httpsPort = 8443, localPort = 8091, admin = 'localhost:2020', staging = false}) {
+  const problem = baseProblem(base) || frontProblem({httpsPort, localPort, admin});
+  if (problem || !base) throw new Error(problem || 'Save a public address first.');
+  if (!ships.length) throw new Error('No managed ships connected.');
+  if (localPort < 1024) throw new Error('Use a local test port from 1024 to 65535.');
+  const ports = [httpsPort, localPort, Number(admin.split(':')[1])];
+  if (ports.includes(eyre)) throw new Error('The controller Eyre port must differ from Caddy listener ports.');
+  const targets = managedTargets({ship, eyre, ships, ports});
+  const controller = `reverse_proxy 127.0.0.1:${eyre} {
+        header_up Host localhost:${eyre}
+        header_up X-Forwarded-Host {hostport}
+        header_up -Cookie
+        header_up -Authorization
+        header_up -Proxy-Authorization
+        health_uri /~/host
+        health_body "^${ship}$"
+        health_interval 10s
+        health_timeout 10s
+        health_fails 3
+      }`;
+  const routes = (joinHost, suffix) => `
+  @escape path_regexp (^|/)\\.\\.(/|$)|%2[eE]
+  handle @escape {
+    respond 400
+  }
+  @join host ${joinHost}
+  handle @join {
+    handle /assign {
+      rewrite * /apps/manor/public/managed/assign
+      ${controller}
+    }
+    @gate path / /gate/ /trolley.png
+    handle @gate {
+      rewrite * /apps/manor/public{uri}
+      ${controller}
+    }
+    handle {
+      respond 404
+    }
+  }
+${managedShipRoutes(targets, eyre, suffix)}
+  handle {
+    respond 404
+  }
+  handle_errors 502 503 504 {
+    header Cache-Control no-store
+    respond "Your ship is busy or restarting. Try again shortly." 503
+  }`;
+  const acme = staging ? 'https://acme-staging-v02.api.letsencrypt.org/directory' : 'https://acme-v02.api.letsencrypt.org/directory';
+  return `# Manor managed ships for ${ship}. Only explicitly registered ships are routed.
+# Public: https://join.${base}/
+# Router: forward public TCP 443 to this machine's port ${httpsPort}
+# Test: http://join.localhost:${localPort}/
+{
+  admin ${admin}
+  auto_https disable_redirects
+  https_port ${httpsPort}
+  grace_period 10s
+  servers {
+    protocols h1 h2
+    strict_sni_host on
+  }
+  on_demand_tls {
+    ask http://127.0.0.1:${eyre}/apps/manor/public/tls-ask
+  }
+  ${privateLogs}
+}
+https:// {
+  tls {
+    on_demand
+    issuer acme {
+      dir ${acme}
+      disable_http_challenge
+    }
+  }
+${routes(`join.${base}`, base)}
+}
+http://:${localPort} {
+  bind 127.0.0.1
+${routes('join.localhost', 'localhost')}
+}
+`;
 }
 
 // The front door: a Caddyfile for this ship. Caddy gives each moon its own
@@ -131,7 +384,9 @@ export function frontProblem({httpsPort, localPort, admin}) {
   if (!port(httpsPort)) return 'Use an HTTPS port from 1 to 65535.';
   if (!port(localPort)) return 'Use a local test port from 1 to 65535.';
   if (httpsPort === localPort) return 'Use different HTTPS and test ports.';
-  if (!/^[a-z0-9.-]+:\d{1,5}$/.test(admin)) return 'Give Caddy\'s admin address as host:port, like localhost:2020.';
+  const address = /^(localhost|127\.0\.0\.1):(\d{1,5})$/.exec(admin);
+  if (!address || !port(Number(address[2]))) return 'Give Caddy\'s local admin address as localhost:port or 127.0.0.1:port.';
+  if ([httpsPort, localPort].includes(Number(address[2]))) return 'The admin port must differ from the HTTPS and test ports.';
   return null;
 }
 export function caddyfile({ship, eyre, base, httpsPort, localPort, admin, staging}) {

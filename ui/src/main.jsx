@@ -1,10 +1,13 @@
 import React, {useEffect, useRef, useState} from 'react';
 import {createRoot} from 'react-dom/client';
-import {AlertCircle, ArrowUpRight, Check, Copy, DoorOpen, Download, Folder, History, ImageUp, Link2, LoaderCircle, Pencil, RotateCcw, Settings, Trash2, Unlock, Users, X} from 'lucide-react';
+import {AlertCircle, ArrowUpRight, Check, Folder, History, ImageUp, LoaderCircle, Pencil, RotateCcw, Trash2, Unlock, Users, X} from 'lucide-react';
 import '@urbit/sigil-js';
 import {act, gateway, manorState, profiles as fetchProfiles, setProfile, theseusState, watchManor, watchProfiles, watchUi, SignedOut} from './api';
-import {avatarSrc, baseProblem, caddyfile, daMs, FRONT_DEFAULTS, frontProblem, landingProblem, moonOrigin, moonStatus, publicLink, resetProgress, snapshotChoices, usedMoons} from './model.mjs';
+import {avatarSrc, daMs, moonOrigin, moonStatus, resetProgress, snapshotChoices, usedMoons} from './model.mjs';
 import './style.css';
+import ManagedShips from './ManagedShips';
+import ThisShip from './ThisShip';
+import PublicAccess from './PublicAccess';
 
 const time = ms => new Date(ms).toLocaleTimeString([], {hour: 'numeric', minute: '2-digit'});
 const day = ms => new Date(ms).toLocaleString([], {month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit'});
@@ -74,56 +77,6 @@ function IconButton({label, children, ...props}) {
   return <button type="button" className="icon-button" aria-label={label} title={label} {...props}>{children}</button>;
 }
 
-// The front door's Caddy options are this browser's: remembered here only.
-const FRONT_KEY = 'manor.front';
-function loadFront() {
-  try {return {...FRONT_DEFAULTS, ...JSON.parse(localStorage.getItem(FRONT_KEY) || '{}')};}
-  catch {return {...FRONT_DEFAULTS};}
-}
-function saveFront(value) {
-  try {localStorage.setItem(FRONT_KEY, JSON.stringify(value));} catch { /* private window */ }
-}
-
-function FrontDoor({manor, notify, fail}) {
-  const [front, setFront] = useState(loadFront);
-  const set = change => setFront(current => {const next = {...current, ...change}; saveFront(next); return next;});
-  const base = manor.settings.base;
-  const problem = frontProblem(front);
-  const text = base && !problem ? caddyfile({ship: manor.host, eyre: manor.eyre, base, ...front}) : '';
-  function download() {
-    const url = URL.createObjectURL(new Blob([text], {type: 'application/octet-stream'}));
-    const a = document.createElement('a'); a.href = url; a.download = 'Caddyfile'; a.click(); URL.revokeObjectURL(url);
-  }
-  async function copy() {
-    try {await navigator.clipboard.writeText(text); notify('Copied the Caddyfile.');}
-    catch {fail('Copy failed. Open the Caddyfile below and copy it by hand.');}
-  }
-  const port = (label, key) => <label>{label}<input aria-label={label} inputMode="numeric" value={front[key]} onChange={e => set({[key]: Number(e.target.value.replace(/\D/g, '')) || 0})}/></label>;
-  return <section className="card" aria-labelledby="front-title">
-    <h2 id="front-title"><DoorOpen size={18}/>Front door</h2>
-    <p className="muted">{manor.front ? `Last visit through it: ${day(manor.front)}.` : 'No visits through it yet.'}</p>
-    {!base ? <p className="hint">Set the public address under Settings first.</p> : <>
-      <p className="hint">Caddy runs next to {manor.host}, outside Urbit. It gives each moon its own secure address and passes on only Manor's public pages and moon traffic.</p>
-      <ol className="steps">
-        <li>Install Caddy once: on a Mac <code>brew install caddy</code>, on Linux from your package manager, on Windows from caddyserver.com.</li>
-        <li>Save this Caddyfile on the machine running {manor.host}, and in its folder run <code>caddy run --config Caddyfile --adapter caddyfile</code>.</li>
-        <li>On your router, forward public TCP port 443 to that machine's port {front.httpsPort}.</li>
-        <li>Try <code>http://join.localhost:{front.localPort}/</code> on that machine, then the public link from a phone on mobile data.</li>
-      </ol>
-      <div className="front-fields">
-        {port('HTTPS port', 'httpsPort')}
-        {port('Test port', 'localPort')}
-        <label>Caddy admin<input aria-label="Caddy admin" value={front.admin} spellCheck="false" onChange={e => set({admin: e.target.value.trim()})}/></label>
-      </div>
-      <label className="check"><input type="checkbox" checked={front.staging} onChange={e => set({staging: e.target.checked})}/>Trial certificates (Let's Encrypt staging: no rate limits, but browsers warn)</label>
-      {problem ? <p className="form-error" role="alert">{problem}</p> : <>
-        <div className="tools"><button type="button" className="primary" onClick={download}><Download size={15}/>Download Caddyfile</button><button type="button" onClick={copy}><Copy size={15}/>Copy</button></div>
-        <details className="config"><summary>Show the Caddyfile</summary><pre data-testid="caddyfile">{text}</pre></details>
-      </>}
-    </>}
-  </section>;
-}
-
 function Dialog({title, children, close, busy}) {
   const ref = useRef();
   useEffect(() => {ref.current.showModal();}, []);
@@ -145,12 +98,10 @@ function App() {
   const [form, setForm] = useState({});
   const [formError, setFormError] = useState('');
   const [now, setNow] = useState(Date.now());
-  const [settings, setSettings] = useState({base: '', landing: ''});
   const [profileData, setProfileData] = useState(null);
   const [gw, setGw] = useState(undefined);
   const [resetRun, setResetRun] = useState(null);
   const mounted = useRef(true);
-  const editedSettings = useRef(false);
 
   // The page reads Manor and Theseus when it opens, when either says
   // something changed, and when the tab is shown again. No timer, except
@@ -170,13 +121,14 @@ function App() {
     if (refreshing.current) return;
     refreshing.current = true;
     try {
-      const [m, t] = await Promise.all([manorState(), theseusState()]);
+      const [m, t] = await Promise.all([manorState(), theseusState().catch(() => null)]);
       if (!mounted.current) return;
       setManor(m); setTheseus(t); setSignedOut(false); setLoadError(''); setNow(Date.now());
-      if (!editedSettings.current) setSettings(m.settings);
       watchManor(scheduleRefresh).catch(() => retryIn(5000));
-      watchUi(scheduleRefresh).catch(() => retryIn(5000));
-      watchProfiles(applyProfile).catch(() => retryIn(5000));
+      if (t) {
+        watchUi(scheduleRefresh).catch(() => retryIn(5000));
+        watchProfiles(applyProfile).catch(() => retryIn(5000));
+      }
     } catch (err) {
       if (!mounted.current) return;
       if (err instanceof SignedOut) setSignedOut(true);
@@ -208,10 +160,10 @@ function App() {
     try {const next = await fetchProfiles(); if (mounted.current) setProfileData(next);} catch { /* shown without names */ }
   }
   useEffect(() => {
-    if (!manor || profileData) return;
+    if (!manor || !theseus || profileData) return;
     loadProfiles();
     gateway().then(g => mounted.current && setGw(g)).catch(() => mounted.current && setGw(null));
-  }, [manor]);
+  }, [manor, theseus]);
 
   // An admin action: errors show in the open dialog, or else on the page.
   async function run(action, done, rejected, report = setError) {
@@ -272,7 +224,7 @@ function App() {
     finally {setBusy(false);}
   }
 
-  const host = theseus?.host;
+  const host = manor?.host || theseus?.host;
   const moons = new Map((theseus?.moons || []).map(m => [m.ship, m]));
   const pool = [...(manor?.pool || [])].sort((a, b) => a.ship.localeCompare(b.ship));
   const rows = pool.map(row => ({...row, status: moonStatus(row, moons.get(row.ship), now)}));
@@ -287,7 +239,6 @@ function App() {
     const timer = setTimeout(() => setNow(Date.now()), nextExpiry - Date.now() + 500);
     return () => clearTimeout(timer);
   }, [nextExpiry]);
-  const link = publicLink(manor?.settings.base || '');
   const fleet = manor?.fleet;
   const loading = !manor && !loadError && !signedOut;
 
@@ -306,17 +257,6 @@ function App() {
     if (type === 'reset') setResetRun(current => current && {...current, phase: ok ? 'tracking' : 'error'});
     if (ok) setModal(null);
   }
-  async function saveSettings(e) {
-    e.preventDefault();
-    const base = settings.base.trim().toLowerCase(), landing = settings.landing.trim();
-    const problem = baseProblem(base) || landingProblem(landing);
-    if (problem) return setError(problem);
-    if (await run({settings: {base, landing}}, 'Settings saved.', 'The host refused these settings.')) editedSettings.current = false;
-  }
-  async function copyLink() {
-    try {await navigator.clipboard.writeText(link); setNotice('Copied the public link.');}
-    catch {setError('Copy failed. Select the link and copy it by hand.');}
-  }
 
   const choices = modal?.type === 'connect' ? snapshotChoices((theseus?.fleets || []).find(f => f.name === form.fleet), theseus?.snapshots || []) : [];
   const chosenFleet = modal?.type === 'connect' && (theseus?.fleets || []).find(f => f.name === form.fleet);
@@ -324,8 +264,8 @@ function App() {
   return <div className="page">
     <header className="top">
       <div className="top-inner">
-        <div className="brand"><img src="/apps/manor/icon.png" alt="" className="brand-icon"/><div><span className="brand-kicker">MOON HOSTING</span><h1>Manor</h1><span className="brand-subtitle">{host ? `Visitor pool on ${host}` : 'Visitor pool'}</span></div></div>
-        <a className="out-link" href="/apps/theseus/">Open Theseus <ArrowUpRight size={14}/></a>
+        <div className="brand"><img src="/apps/manor/icon.png" alt="" className="brand-icon"/><div><span className="brand-kicker">SHIP HOSTING</span><h1>Manor</h1><span className="brand-subtitle">{host ? `Visitor pool on ${host}` : 'Visitor pool'}</span></div></div>
+        {theseus && <a className="out-link" href="/apps/theseus/">Open Theseus <ArrowUpRight size={14}/></a>}
       </div>
     </header>
 
@@ -354,27 +294,25 @@ function App() {
     {loading && <div className="pending" role="status"><LoaderCircle size={16} className="spin"/>Loading</div>}
 
     {manor && <>
-      <div className="overview-grid">
-      <section className="card" aria-labelledby="link-title">
-        <h2 id="link-title"><Link2 size={18}/>Public link</h2>
-        {link ? <div className="link-row"><a href={link} target="_blank" rel="noreferrer" className="public-link">{link}</a><button type="button" onClick={copyLink}><Copy size={15}/>Copy</button></div>
-          : <p className="muted">No public address yet. Set one under Settings.</p>}
-        <p className="hint">Visitors pull the lever there and land in {manor.settings.landing} on a free moon.</p>
-      </section>
-
+      <ManagedShips manor={manor} busy={busy} run={run} Identity={ShipIdentity}/>
+      <PublicAccess manor={manor} theseus={theseus} busy={busy} run={run} notify={text => {setError(''); setNotice(text);}} fail={setError}/>
+      {!theseus && <section className="card" aria-labelledby="theseus-title">
+        <div className="card-head"><h2 id="theseus-title"><Folder size={18}/>Theseus fleet</h2><span className="badge warn">Unavailable</span></div>
+        <div className="fleet-row"><p className="muted">{fleet ? `${fleet.name} · ${pool.length} virtual moons` : 'No virtual fleet connected.'}</p><button type="button" disabled title="Theseus is not running">Connect a fleet</button></div>
+      </section>}
+      {theseus && <>
       <section className="card" aria-labelledby="fleet-title">
-        <h2 id="fleet-title"><Folder size={18}/>Fleet</h2>
+        <h2 id="fleet-title"><Folder size={18}/>Theseus fleet</h2>
         <div className="fleet-row">
           {fleet ? <p><strong>{fleet.name}</strong> <span className="muted">· {plural(pool.length, 'moon')}, reset from {fleet.snapshot}</span></p>
             : <p className="muted">No fleet connected. Boot one in Theseus, take a fleet snapshot, then connect it here.</p>}
           <button type="button" className={fleet ? '' : 'primary'} disabled={busy || !theseus} onClick={() => open('connect')}>{fleet ? 'Change fleet' : 'Connect a fleet'}</button>
         </div>
       </section>
-      </div>
 
       <section className="card" aria-labelledby="moons-title">
         <div className="card-head">
-          <h2 id="moons-title"><Users size={18}/>Moons</h2>
+          <h2 id="moons-title"><Users size={18}/>Virtual moons</h2>
           <div className="tools">
             <button type="button" disabled={busy || !used.length} onClick={() => open('reset', {ships: used, used: true})}><RotateCcw size={15}/>Reset used moons ({used.length})</button>
             <button type="button" disabled={busy || !pool.length} onClick={() => open('reset', {ships: pool.map(r => r.ship), all: true})}><RotateCcw size={15}/>Reset fleet</button>
@@ -397,19 +335,9 @@ function App() {
           </tr>)}</tbody>
         </table></div> : <p className="muted">The pool is empty.</p>}
       </section>
+      </>}
 
-      <section className="card" aria-labelledby="settings-title">
-        <h2 id="settings-title"><Settings size={18}/>Settings</h2>
-        <form className="settings" onSubmit={saveSettings}>
-          <label>Public address<input aria-label="Public address" value={settings.base} placeholder="203-0-113-7.nip.io" spellCheck="false" onChange={e => {editedSettings.current = true; setSettings({...settings, base: e.target.value});}}/>
-            <small>Visitors use join.&lt;address&gt;, and each moon gets &lt;moon&gt;.&lt;address&gt;. With nip.io, it is your public IP with dashes.</small></label>
-          <label>Landing page<input aria-label="Landing page" value={settings.landing} placeholder="/apps/glurff/" spellCheck="false" onChange={e => {editedSettings.current = true; setSettings({...settings, landing: e.target.value});}}/>
-            <small>Where visitors arrive on their moon.</small></label>
-          <div className="tools"><button className="primary" type="submit" disabled={busy}>Save settings</button></div>
-        </form>
-      </section>
-
-      <FrontDoor manor={manor} notify={text => {setError(''); setNotice(text);}} fail={setError}/>
+      <ThisShip manor={manor} busy={busy} run={run} Identity={ShipIdentity}/>
 
       <section className="card" aria-labelledby="log-title">
         <h2 id="log-title"><History size={18}/>Activity</h2>

@@ -6,4 +6,5 @@ node_modules/
 ui/dist/
 ui/test-results/
 .DS_Store
+__pycache__/
 RUNBOOK.md

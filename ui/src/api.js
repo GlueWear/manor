@@ -14,13 +14,16 @@ async function scry(path) {
 }
 
 // %manor's pool, claims, settings and activity.
-export const manorState = () => scry('manor/state').then(validateState);
+export async function manorState() {
+  const data = validateState(await scry('manor/state'));
+  api.ship = String(data.host).replace(/^~/, '');
+  return data;
+}
 
 // Theseus's moons, fleets and snapshots: readiness lives there.
 export async function theseusState() {
   const data = await scry('theseus/ui');
   if (!Array.isArray(data?.moons) || !Array.isArray(data.fleets) || !Array.isArray(data.snapshots)) throw new Error('Theseus returned an unexpected state.');
-  api.ship = String(data.host).replace(/^~/, '');
   return data;
 }
 

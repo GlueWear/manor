@@ -9,19 +9,24 @@
 #   ./manor logs
 #   ./manor install     a launchd agent (macOS): start at login, restart on failure
 #   ./manor uninstall
+#   ./manor ship --help  manage independent Urbit piers (macOS; moon is an alias)
 #
 # Everything else, handing out moons and resetting them, is the %manor app
 # on the ship. Download the Caddyfile from its Front door section and save it
 # next to this script as Caddyfile.
 set -u
 MANOR_HOME="$(cd "$(dirname "$0")" && pwd)"
+export PATH="/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:$PATH"
+if [ "${1:-}" = ship ] || [ "${1:-}" = moon ]; then
+  shift
+  exec python3 "$MANOR_HOME/ops/moons.py" "$@"
+fi
 CONFIG="$MANOR_HOME/Caddyfile"
 LOGS="$MANOR_HOME/logs"
 AGENTS="$HOME/Library/LaunchAgents"
 GUI="gui/$(id -u)"
 LABEL=io.gluewear.manor.caddy
 MATCH="caddy run --config $CONFIG"
-export PATH="/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:$PATH"
 
 log() { printf 'manor: %s\n' "$*" >&2; }
 die() { log "error: $*"; exit 1; }

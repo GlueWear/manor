@@ -2,6 +2,8 @@
 // pokes, and Theseus's ui.json. Mirrors app/manor.hoon's checks.
 import {createServer} from 'node:http';
 import {readFileSync} from 'node:fs';
+import {fileURLToPath} from 'node:url';
+import {appConfigProblem, externalAvatarProblem, managedEndpoint, shipProblem} from '../src/model.mjs';
 
 const host = '~siglup-narwet';
 const moon = name => `~${name}-siglup-narwet`;
@@ -9,20 +11,25 @@ const [A, B, C, D, E] = ['ritdex-sorled', 'lonteb-tarhus', 'fopsep-litruc', 'doz
 const png = Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==', 'base64');
 const manorIcon = readFileSync(new URL('../../desk/web/icon.png', import.meta.url));
 const ready = ship => ({ship, status: 'healthy', paused: false, recovery: null, desks: [{desk: 'base', stage: 'running'}, {desk: 'glurff', stage: 'running'}]});
+const installedApps = () => [{desk: 'base', running: true, web: false}, {desk: 'landscape', running: true, web: true}, {desk: 'glurff', running: true, web: true}, {desk: 'noltbook', running: true, web: true}, {desk: 'noltbook-data', running: false, web: false}];
 
-let manor, theseus, signedOut, pokes, profiles;
+let manor, theseus, signedOut, pokes, profiles, hasTheseus, profileFailure;
 // Names and pictures, as Theseus's profiles.json gives them: ~ritdex-sorled
 // is named, ~fopsep-litruc doesn't run Noltbook.
 const profileRow = (ship, noltbook = true, name = null, avatar = null) => ({ship, noltbook, name, avatar});
 const reset = () => {
-  signedOut = false; pokes = [];
+  signedOut = false; pokes = []; hasTheseus = true; profileFailure = null;
   const now = Date.now();
   manor = {
     fleet: {name: 'hosting', snapshot: '/hosting-reset'},
     settings: {base: '', landing: '/apps/landscape/'},
+    visitorPool: 'theseus',
     pool: [A, B, C].map(ship => ({ship, snapshot: '/hosting-reset', claim: null})),
     log: [{at: now - 60_000, text: 'Connected fleet hosting: 3 moons.'}],
     front: null, host, eyre: 8083,
+    managed: {localOnly: true, ships: []},
+    pairRequests: [],
+    controlled: {controller: null, landing: 'landscape', required: ['landscape'], ready: true, busy: false, profile: null, apps: installedApps()},
   };
   profiles = new Map([[A, profileRow(A, true, 'Ada')], [B, profileRow(B)], [C, profileRow(C, false)], [D, profileRow(D)], [E, profileRow(E)]]);
   manor.pool[0].claim = {at: now - 600_000, expires: null, entered: now - 590_000};
@@ -96,10 +103,74 @@ function apply(action) {
     manor.pool = manor.pool.filter(r => !hers.includes(r.ship));
     if (!manor.pool.length) manor.fleet = null;
     if (hers.length) log(`Removed ${names(hers)} from the pool.`);
-  } else if (kind === 'settings') {
+  } else if (kind === 'settings' || kind === 'hosting') {
     if (!/^[a-z0-9.-]{0,200}$/.test(value.base) || !/^\/[\x21-\x7e]{0,199}$/.test(value.landing)) return 'bad settings';
+    if (kind === 'hosting') {
+      if (!['ships', 'theseus'].includes(value.pool)) return 'bad visitor pool';
+      manor.visitorPool = value.pool;
+      manor.managed.localOnly = value.pool !== 'ships';
+      manor.managed.publicEnabled = value.pool === 'ships';
+    }
     manor.settings = {base: value.base, landing: value.landing};
     log('Settings saved.');
+  } else if (kind === 'pair') {
+    if (value.controller !== null && (shipProblem(value.controller) || value.controller === host)) return 'bad controller';
+    manor.controlled.controller = value.controller;
+  } else if (kind === 'managed-configure') {
+    if (manor.controlled.busy || appConfigProblem(value)) return 'bad managed configuration';
+    Object.assign(manor.controlled, value);
+  } else if (kind === 'ship-reject') {
+    if (!manor.pairRequests.some(row => row.ship === value.who)) return 'no request';
+    manor.pairRequests = manor.pairRequests.filter(row => row.ship !== value.who);
+  } else if (kind === 'ship-forget') {
+    if (!manor.managed.ships.some(row => row.ship === value.who)) return 'no ship';
+    manor.managed.ships = manor.managed.ships.filter(row => row.ship !== value.who);
+  } else if (['ship-add', 'ship-approve'].includes(kind)) {
+    if (shipProblem(value.who) || value.who === host || (kind === 'ship-add' && !('endpoint' in value))) return 'bad ship';
+    if (kind === 'ship-approve' && !manor.pairRequests.some(row => row.ship === value.who)) return 'no request';
+    const endpointValue = value.endpoint === undefined ? null : value.endpoint;
+    const existing = manor.managed.ships.find(row => row.ship === value.who);
+    if (existing?.claim || existing?.pending) return 'still in use';
+    if (endpointValue !== null || existing?.port) {
+      try {
+        const endpoint = managedEndpoint({endpoint: endpointValue, port: existing?.port});
+        if (endpoint.key === `127.0.0.1:${manor.eyre}` || manor.managed.ships.some(row => row.ship !== value.who && managedEndpoint(row).key === endpoint.key)) return 'duplicate endpoint';
+      } catch {return 'bad endpoint';}
+    }
+    if (existing) existing.endpoint = endpointValue;
+    else manor.managed.ships.push({ship: value.who, port: 8101 + manor.managed.ships.length, online: true, ready: false, blocked: true, pending: null, fault: null, profile: {displayName: 'Pilot', avatar: null}, claim: null, generation: 0, landing: 'landscape', required: ['landscape'], transport: 'manor', endpoint: endpointValue, apps: installedApps()});
+    if (kind === 'ship-approve') manor.pairRequests = manor.pairRequests.filter(row => row.ship !== value.who);
+  } else if (kind.startsWith('ship-')) {
+    const row = manor.managed.ships.find(row => row.ship === value.who);
+    if (!row || row.pending) return 'not available';
+    if (['ship-configure', 'ship-upgrade', 'ship-remove'].includes(kind) && row.claim) return 'still in use';
+    if (kind === 'ship-unlock') {
+      if (!row.online) return 'not connected';
+      row.pending = 'revoke';
+      setTimeout(() => {row.pending = null; row.blocked = false; row.claim = null; row.ready = true; row.generation++; signal('state');}, 800);
+    } else if (kind === 'ship-reconnect') row.online = true;
+    else if (kind === 'ship-remove') manor.managed.ships = manor.managed.ships.filter(row => row.ship !== value.who);
+    else if (kind === 'ship-upgrade') {
+      if (row.transport !== 'manor-moon') return 'already upgraded';
+      row.transport = 'manor';
+    } else if (kind === 'ship-configure') {
+      if (appConfigProblem(value)) return 'bad managed configuration';
+      row.landing = value.landing; row.required = value.required;
+    } else if (kind === 'ship-profile') {
+      if (!row.online || 'upload' in value || ('name' in value && value.name !== null && typeof value.name !== 'string') || ('avatar' in value && value.avatar !== null && externalAvatarProblem(value.avatar))) return 'bad profile';
+      const failure = profileFailure;
+      profileFailure = null;
+      row.pending = 'profile';
+      setTimeout(() => {
+        row.pending = null; row.fault = failure;
+        if (!failure) {
+          row.profile ||= {displayName: null, avatar: null};
+          if ('name' in value) row.profile.displayName = value.name;
+          if ('avatar' in value) row.profile.avatar = value.avatar === null ? null : {type: 'external', url: value.avatar};
+        }
+        signal('state');
+      }, 800);
+    } else return 'bad ship action';
   } else return 'bad action';
   return null;
 }
@@ -112,10 +183,23 @@ const send = (channel, event) => {
 };
 const json = (res, value) => {res.setHeader('content-type', 'application/json'); res.end(JSON.stringify(value));};
 
-createServer(async (req, res) => {
+export const mockServer = createServer(async (req, res) => {
   const url = req.url;
   if (url === '/health') return res.end('ok');
   if (url === '/reset') {reset(); return res.end('ok');}
+  if (url === '/no-theseus') {hasTheseus = false; return res.end('ok');}
+  if (url === '/managed-fixture' && req.method === 'POST') {
+    let body = '';
+    for await (const chunk of req) body += chunk;
+    const data = JSON.parse(body);
+    if (data.ships) manor.managed.ships = data.ships.map(row => row.apps === undefined ? {...row, apps: installedApps()} : row);
+    if (data.pairRequests) manor.pairRequests = data.pairRequests;
+    if (data.controlled) Object.assign(manor.controlled, data.controlled);
+    if (data.visitorPool) manor.visitorPool = data.visitorPool;
+    if ('profileFailure' in data) profileFailure = data.profileFailure;
+    signal('state'); return res.end('ok');
+  }
+  if (url === '/subscriptions') return json(res, [...channels.values()].flatMap(ch => ['state', 'ui', 'profiles'].filter(key => ch[key])));
   if (url === '/sign-out') {signedOut = true; return res.end('ok');}
   // a visitor pulled the lever (as %manor's /assign would)
   if (url.startsWith('/visitor/')) {
@@ -129,6 +213,7 @@ createServer(async (req, res) => {
   if (change) {const p = profiles.get(change[1]); if (p) {p.name = decodeURIComponent(change[2]) || null; pushProfile(change[1]);} return res.end('ok');}
   if (url === '/apps/manor/icon.png') {res.setHeader('content-type', 'image/png'); return res.end(manorIcon);}
   if (url.startsWith('/~/scry/') && signedOut) {res.statusCode = 403; return res.end();}
+  if (!hasTheseus && (url.startsWith('/~/scry/theseus/') || url.startsWith('/~/scry/theseus-ui/'))) {res.statusCode = 404; return res.end();}
   if (url === '/~/scry/manor/state.json') return json(res, manor);
   if (url === '/~/scry/theseus/ui.json') return json(res, theseus);
   if (url === '/~/scry/theseus/profiles.json') return json(res, {host: profileRow(host, false), moons: [...profiles.values()]});
@@ -150,17 +235,21 @@ createServer(async (req, res) => {
   for (const action of JSON.parse(body || '[]')) {
     if (action.action === 'delete') {channel.response?.end(); channels.delete(url); continue;}
     if (action.action === 'subscribe') {
+      if (action.ship !== host.slice(1)) {send(channel, {id: action.id, response: 'subscribe', err: 'wrong local ship'}); continue;}
+      if (!hasTheseus && action.app === 'theseus') {send(channel, {id: action.id, response: 'subscribe', err: 'not installed'}); continue;}
       const key = {'theseus/profiles': 'profiles', 'theseus/ui': 'ui', 'manor/state': 'state'}[`${action.app}${action.path}`];
       if (key) channel[key] = action.id;
       send(channel, {id: action.id, response: 'subscribe', ok: 'ok'}); continue;
     }
     if (action.action !== 'poke') continue;
     const before = JSON.stringify(manor);
-    const err = action.app === 'manor' && action.mark === 'manor-action' ? apply(action.json)
+    const err = action.ship !== host.slice(1) ? 'wrong local ship'
+      : action.app === 'manor' && action.mark === 'manor-action' ? apply(action.json)
       : action.app === 'theseus' && action.mark === 'theseus-ui' && action.json.profile ? applyProfile(action.json.profile)
       : 'unknown poke';
     send(channel, err ? {id: action.id, response: 'poke', err} : {id: action.id, response: 'poke', ok: 'ok'});
     if (JSON.stringify(manor) !== before) signal('state');
   }
   res.statusCode = 204; res.end();
-}).listen(8095, '127.0.0.1');
+});
+if (process.argv[1] === fileURLToPath(import.meta.url)) mockServer.listen(8095, '127.0.0.1');

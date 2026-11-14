@@ -1,14 +1,17 @@
 # manor
 
-A public front door for [Theseus](https://github.com/GlueWear/theseus) moons.
-Share one link. A visitor passes a (silly) proof-of-human page, gets a moon of
-their own from a pool of running moons, and lands in it already logged in, at
-a page you choose, such as Glurff. They never see the moon's `+code`. After a
-demo you reset the used moons to a clean snapshot.
+A visitor pool for Urbit ships, with optional
+[Theseus](https://github.com/GlueWear/theseus) integration.
+Share one link. A visitor passes a (silly) proof-of-human page, gets a ship
+from your pool, and lands in it already logged in at an app you choose,
+such as Glurff. They never see the ship's `+code`. Independent ships are
+manually unlocked for reuse; virtual Theseus fleets can also be reset to
+a clean snapshot. Unlock does not erase visitor data.
 
-Manor is an Urbit app, `%manor`, that sits next to `%theseus` on the same
-ship. The only thing outside Urbit is [Caddy](https://caddyserver.com), which
-gives each moon its own secure web address.
+Manor is an Urbit app, `%manor`, installed on the controller and the
+independent ships it manages. Theseus is optional, for virtual fleets.
+[Caddy](https://caddyserver.com) runs outside Urbit and gives each visitor
+ship its own secure web address.
 
 ```
 your ship
@@ -33,7 +36,51 @@ is not enough to get into someone else's. Only moons that Theseus says are
 ready go out: running, not paused or being restored, and every desk caught up
 with its source.
 
-## Setting it up
+## Managed Ships
+
+The same `%manor` agent runs on controllers and managed ships. Explicit
+pairing grants control; a ship may have both roles. Galaxies, stars, planets,
+moons and comets can be registered, without a parent-child relationship.
+The managed pool has manual Unlock, Noltbook name/picture-URL controls,
+landing-app configuration and local/HTTPS/tunnel endpoint settings. There is
+no idle eviction or automatic browser-close eviction.
+
+The page opens on **Ships**. Each ship's settings button selects its
+landing app from that ship's running web apps. Extra readiness dependencies
+are optional under **Advanced readiness checks**. Storage-only desks are
+not offered as landing apps.
+
+**Public access** keeps the address and one Caddyfile download visible,
+even with Theseus suspended. Choose the visitor pool and **Save settings**.
+Managed ships with a saved public address produce an HTTPS configuration;
+without an address they produce a loopback-only test configuration. Theseus
+fleets retain their existing routing. Saving selects the pool in Manor,
+but does not reload the running Caddy process.
+
+**Allow another Manor to manage this ship** contains controller pairing
+and this ship's own visitor settings. It is separate from configuring the
+ships that this Manor manages.
+
+Pairing sends a connection request to the chosen controller. Its owner
+reviews it under **Connection requests** and chooses **Approve**; new ships
+still require **Unlock** before they can receive visitors. Manual
+registration remains supported through the `%ship-add` admin action.
+
+For a retired or deleted ship, **Forget ship** removes only its Manor
+registration, reservation and pending requests. It does not need a remote
+unlock, stop or delete the actual ship, or revoke existing browser sessions.
+
+See [ops/MANAGED-SHIPS.md](ops/MANAGED-SHIPS.md) for deployment, migration,
+local testing and public HTTPS setup. Upgrades preserve the existing
+visitor pool until explicitly changed. Visitor sessions are ship-owner
+sessions, not an app-only sandbox; reuse does not erase visitor data.
+
+The optional `./manor ship` supervisor manages independent Vere processes.
+Its older `./manor moon` spelling remains an alias; existing jobs and piers
+are not renamed. Existing comets can be adopted rather than provisioned from
+a moon key.
+
+## Theseus Setup
 
 You need a planet running `%theseus`, Caddy 2.7 or newer, and a way in from
 the internet: a router that can forward a port to the machine running your
@@ -125,6 +172,28 @@ which moon, resets, and anything that failed.
 
 ## Development
 
+### Managed ships
+
+`./manor ship` manages independent ship piers with one macOS LaunchAgent per
+ship, fixed HTTP/Ames ports, private key staging and redacted logs. The old
+`./manor moon` spelling remains an alias. See
+[ops/FULL-MOONS.md](ops/FULL-MOONS.md) for setup, lifecycle commands and the
+live acceptance checklist. It requires Python 3.9 or newer.
+
+Install the same `%manor` desk on controller and managed ships. Pairing is
+explicit; a managed ship authorizes its controller over Ames. A ship can
+also manage its own pool. See [ops/MANAGED-SHIPS.md](ops/MANAGED-SHIPS.md)
+for role permissions, endpoint routing, public hosting and upgrade
+instructions. Existing `%manor-moon` registrations remain supported during
+the transition; `moon-desk/` and its documents are legacy references, not a
+second agent required for new installations. Theseus remains available as
+an optional visitor pool. Use dedicated visitor ships: owner sessions are
+not restricted to the landing app.
+
+The existing `./manor start|stop|status` commands still control Caddy.
+
+Run manager tests with `python3 -m unittest discover -s ops -p 'test_*.py' -v`.
+
 | Path | What |
 | --- | --- |
 | `desk/` | the `%manor` desk: `app/manor.hoon`, `sur/manor.hoon`, `mar/manor/action.hoon`, the lever page `web/gate.html`, and the built admin page `web/manor.html` |
@@ -139,8 +208,9 @@ npm run test:e2e    # the page against a mock host
 npm run build       # writes desk/web/manor.html
 ```
 
-`%manor` needs `%theseus` on the same ship, with the `%theseus-session` poke
-(Theseus at commit `876e2ef` or later).
+Only virtual fleets need `%theseus` on the controller, with the
+`%theseus-session` poke (Theseus at commit `876e2ef` or later). Independent
+managed ships use the paired `%manor` agent and do not require Theseus.
 
 The tile icon is a temporary placeholder.
 

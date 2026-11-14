@@ -1,6 +1,6 @@
 :~
   title+'Manor'
-  info+'Hand this ship\'s Theseus moons to visitors through a public link, and reset them after demos.'
+  info+'Manage visitor access to Theseus fleets and independent Urbit ships.'
   color+0x36.4a5a
   image+'/apps/manor/icon.png'
   site+/apps/manor

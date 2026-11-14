@@ -4,14 +4,16 @@
 ::    each one goes back to.  Claims say which visitor has which moon.
 ::    Everything else lives in %theseus: moon codes, readiness, the
 ::    restores that reset a moon, and the sessions that log visitors in.
+::    Managed ships use the same agent and a separate pool. The owner
+::    explicitly selects which pool serves public visitors.
 ::
 ::    The public side is reached only through Caddy, at /apps/manor/public:
 ::    the lever page and /assign on join.<base>, /enter on a moon's own
 ::    address (Caddy maps <moon>.<base>/~manor/enter there), and Caddy's
 ::    certificate check, /tls-ask.  Everything else is for the owner.
 ::
-/-  manor
-/+  default-agent, dbug, server
+/-  manor, manor-ship
+/+  default-agent, dbug, server, manor-pool, control=manor-ship
 |%
 +$  state-0
   $:  %0
@@ -32,13 +34,71 @@
       log=(list [at=@da text=@t])
       front=(unit @da)
   ==
-+$  versioned-state  $%(state-0 state-1)
++$  state-2
+  $:  %2
+      pool=(map ship path)
+      fleet=(unit [name=@tas snapshot=path])
+      claims=(map ship claim:manor)
+      =settings:manor
+      log=(list [at=@da text=@t])
+      front=(unit @da)
+      full=full-pool:manor
+  ==
++$  state-3
+  $:  %3
+      pool=(map ship path)
+      fleet=(unit [name=@tas snapshot=path])
+      claims=(map ship claim:manor)
+      =settings:manor
+      log=(list [at=@da text=@t])
+      front=(unit @da)
+      full=managed-pool-4:manor
+      controlled=local-state:manor-ship
+  ==
++$  state-4
+  $:  %4
+      pool=(map ship path)
+      fleet=(unit [name=@tas snapshot=path])
+      claims=(map ship claim:manor)
+      =settings:manor
+      log=(list [at=@da text=@t])
+      front=(unit @da)
+      full=managed-pool-4:manor
+      controlled=local-state:manor-ship
+      pair-requests=(map ship @da)
+  ==
++$  state-5
+  $:  %5
+      pool=(map ship path)
+      fleet=(unit [name=@tas snapshot=path])
+      claims=(map ship claim:manor)
+      =settings:manor
+      log=(list [at=@da text=@t])
+      front=(unit @da)
+      full=managed-pool-5:manor
+      controlled=local-state:manor-ship
+      pair-requests=(map ship @da)
+  ==
++$  state-6
+  $:  %6
+      pool=(map ship path)
+      fleet=(unit [name=@tas snapshot=path])
+      claims=(map ship claim:manor)
+      =settings:manor
+      log=(list [at=@da text=@t])
+      front=(unit @da)
+      full=managed-pool:manor
+      controlled=local-state:manor-ship
+      pair-requests=(map ship @da)
+      visitor-pool=?(%ships %theseus)
+  ==
++$  versioned-state  $%(state-0 state-1 state-2 state-3 state-4 state-5 state-6)
 +$  card  card:agent:gall
 ::  how long a one-time link to a moon works
 ::
 ++  ticket-life  ~m2
 --
-=|  state-1
+=|  state-6
 =*  state  -
 =<
 %-  agent:dbug
@@ -49,18 +109,32 @@
     hc    ~(. +> bowl)
 ::
 ++  on-init
-  :_  this(landing.settings '/apps/landscape/')
-  ~[[%pass /bind %arvo %e %connect `/apps/manor %manor]]
+  ^-  (quip card _this)
+  =/  setup  bootstrap:~(. control [bowl initial:manor-ship])
+  :_  this(landing.settings '/apps/landscape/', controlled setup, visitor-pool %ships)
+  [[%pass /bind %arvo %e %connect `/apps/manor %manor] (weld watches:~(. control [bowl setup]) announce:~(. control [bowl setup]))]
 ::
 ++  on-save  !>(state)
 ++  on-load
   |=  old=vase
   ^-  (quip card _this)
   =/  got  !<(versioned-state old)
-  ?-  -.got
-    %1  `this(state got)
-    %0  `this(state [%1 pool.got fleet.got claims.got settings.got log.got ~])
-  ==
+  =/  fallback=local-state:manor-ship
+    ?:  |(=(%3 -.got) =(%4 -.got) =(%5 -.got) =(%6 -.got))  initial:manor-ship
+    bootstrap:~(. control [bowl initial:manor-ship])
+  =/  loaded=state-6
+    ?-  -.got
+      %6  got
+      %5  [%6 pool.got fleet.got claims.got settings.got log.got front.got (migrate-managed-5:manor full.got) controlled.got pair-requests.got %theseus]
+      %4  [%6 pool.got fleet.got claims.got settings.got log.got front.got (migrate-managed:manor full.got) controlled.got pair-requests.got %theseus]
+      %3  [%6 pool.got fleet.got claims.got settings.got log.got front.got (migrate-managed:manor full.got) controlled.got ~ %theseus]
+      %2  [%6 pool.got fleet.got claims.got settings.got log.got front.got (migrate-pool:manor full.got) fallback ~ %theseus]
+      %1  [%6 pool.got fleet.got claims.got settings.got log.got front.got *managed-pool:manor fallback ~ %theseus]
+      %0  [%6 pool.got fleet.got claims.got settings.got log.got ~ *managed-pool:manor fallback ~ %theseus]
+    ==
+  =/  resumed  resume:~(. manor-pool [bowl full.loaded])
+  =/  local  resume:~(. control [bowl controlled.loaded])
+  [(weld -.resumed -.local) this(state loaded(full +.resumed, controlled +.local))]
 ::
 ::  Any change to the pool, claims, settings or activity is told to the
 ::  admin page (/state), which then reads it again: no timer.
@@ -74,6 +148,14 @@
         %manor-action
       ?>  =(src.bowl our.bowl)
       (act:hc !<(action:manor vase))
+    ::
+        %manor-ship-action
+      =^  cards  controlled  (act:~(. control [bowl controlled]) !<(action:manor-ship vase))
+      [cards state]
+    ::
+        %manor-pair-request
+      ?>  =(~ !<(~ vase))
+      (pair-request:hc src.bowl)
     ::
         %handle-http-request
       =/  req  !<([id=@ta req=inbound-request:eyre] vase)
@@ -91,13 +173,19 @@
     [%http-response @ ~]  `this
     ::  "something changed": the owner's admin page
     [%state ~]  ?>(=(src.bowl our.bowl) `this)
+    [%status ~]    [(watch:~(. control [bowl controlled]) path) this]
+    [%apps ~]      [(watch:~(. control [bowl controlled]) path) this]
+    [%result @ ~]  [(watch:~(. control [bowl controlled]) path) this]
   ==
 ::
 ++  on-peek
   |=  =path
   ^-  (unit (unit cage))
   ?+  path  (on-peek:def path)
-    [%x %state ~]  ``json+!>(state-json:hc)
+    [%x %state ~]  ?>(=(src.bowl our.bowl) ``json+!>(state-json:hc))
+    [%x %status ~]
+      ?>  authorized:~(. control [bowl controlled])
+      ``noun+!>(snapshot:~(. control [bowl controlled]))
   ==
 ::
 ::  From %theseus: a reset's answer, and a visitor's session (+agent)
@@ -107,11 +195,18 @@
   ^-  (quip card _this)
   =/  old  state
   =^  cards  state  (agent:hc wire sign)
-  [?:(=(old state) cards (snoc cards state-signal:hc)) this]
+  [?:(|(!=(old state) ?=([%fact *] sign)) (snoc cards state-signal:hc) cards) this]
 ::
 ++  on-arvo
   |=  [=wire =sign-arvo]
   ^-  (quip card _this)
+  ?:  ?=([?(%ship-http %ship-timeout) *] wire)
+    =^  cards  controlled  (arvo:~(. control [bowl controlled]) wire sign-arvo)
+    [(snoc cards state-signal:hc) this]
+  ?:  ?=([%full-timeout @ ~] wire)
+    ?>  ?=([%behn %wake ~] sign-arvo)
+    =^  cards  full  (timeout:~(. manor-pool [bowl full]) i.t.wire)
+    [(snoc cards state-signal:hc) this]
   ?:  ?=([%bind ~] wire)  `this
   (on-arvo:def wire sign-arvo)
 ::
@@ -120,12 +215,76 @@
 --
 |_  =bowl:gall
 ::
+::  An authenticated peer can request a connection, never grant itself one.
+++  pair-request
+  |=  who=ship
+  ^-  (quip card _state)
+  ?:  |(=(who our.bowl) (gth (met 0 who) 128))  `state
+  ?:  (~(has by ships.full) who)
+    =/  fc  ~(. manor-pool [bowl full])
+    [(weld (refresh-watch:fc who) (apps-watch:fc who &)) state]
+  ?:  (~(has by pair-requests) who)  `state
+  ?:  (gte ~(wyt by pair-requests) 64)  `state
+  `state(pair-requests (~(put by pair-requests) who now.bowl))
+::
 ::  +act: an admin action from the page
 ::
 ++  act
   |=  =action:manor
   ^-  (quip card _state)
   ?-    -.action
+      %full-add
+    ?>  !(~(has by pool) who.action)
+    =^  cards  full  (register:~(. manor-pool [bowl full]) who.action ~)
+    [cards state(pair-requests (~(del by pair-requests) who.action), log (add-log 'Managed ship registered for local testing.'))]
+  ::
+      %full-remove
+    =^  cards  full  (remove:~(. manor-pool [bowl full]) who.action)
+    [cards state(log (add-log 'Managed ship removed from the local pool.'))]
+  ::
+      %full-unlock
+    =^  cards  full  (unlock:~(. manor-pool [bowl full]) who.action)
+    [cards state(log (add-log 'Requested managed-ship session revocation.'))]
+  ::
+      %ship-add
+    ?>  !(~(has by pool) who.action)
+    =^  cards  full  (register:~(. manor-pool [bowl full]) who.action endpoint.action)
+    [cards state(pair-requests (~(del by pair-requests) who.action), log (add-log 'Managed ship registered.'))]
+      %ship-approve
+    ?>  (~(has by pair-requests) who.action)
+    ?>  !(~(has by pool) who.action)
+    =^  cards  full  (register:~(. manor-pool [bowl full]) who.action endpoint.action)
+    [cards state(pair-requests (~(del by pair-requests) who.action), log (add-log 'Approved ship connection. Unlock it before sharing.'))]
+      %ship-reject
+    `state(pair-requests (~(del by pair-requests) who.action))
+      %ship-reconnect
+    =^  cards  full  (reconnect:~(. manor-pool [bowl full]) who.action)
+    [cards state]
+      %ship-upgrade
+    =/  row  (~(got by ships.full) who.action)
+    =^  cards  full  (register:~(. manor-pool [bowl full]) who.action endpoint.row)
+    [cards state(log (add-log 'Switched managed ship to the unified Manor agent.'))]
+      %ship-remove
+    =^  cards  full  (remove:~(. manor-pool [bowl full]) who.action)
+    [cards state(log (add-log 'Removed managed ship.'))]
+      %ship-forget
+    =^  cards  full  (forget:~(. manor-pool [bowl full]) who.action)
+    [cards state(pair-requests (~(del by pair-requests) who.action), log (add-log 'Forgot ship registration and reservation; remote sessions were not revoked.'))]
+      %ship-unlock
+    =^  cards  full  (unlock:~(. manor-pool [bowl full]) who.action)
+    [cards state(log (add-log 'Requested managed-ship session revocation.'))]
+      %ship-profile
+    =^  cards  full  (profile:~(. manor-pool [bowl full]) who.action name.action avatar.action)
+    [cards state(log (add-log 'Requested managed-ship profile update.'))]
+      %ship-configure
+    =^  cards  full  (configure:~(. manor-pool [bowl full]) who.action landing.action required.action)
+    [cards state(log (add-log 'Requested managed-ship landing configuration.'))]
+      %pair
+    =^  cards  controlled  (act:~(. control [bowl controlled]) [%pair controller.action])
+    [cards state]
+      %managed-configure
+    =^  cards  controlled  (act:~(. control [bowl controlled]) [%configure landing.action required.action])
+    [cards state]
   ::
   ::  the pool becomes the fleet's moons, each reset from the snapshot,
   ::  which must hold all of them; claims on other moons are dropped
@@ -135,6 +294,7 @@
     =/  members  (fleet-ships ui fleet.action)
     ?~  members  ~|([%manor-no-such-fleet fleet.action] !!)
     ?:  =(~ u.members)  ~|([%manor-empty-fleet fleet.action] !!)
+    ?>  (levy u.members |=(s=ship !(~(has by ships.full) s)))
     =/  covered  (snapshot-ships ui snapshot.action)
     =/  missing  (skip u.members |=(s=ship (~(has in covered) s)))
     ?^  missing  ~|([%manor-snapshot-misses snapshot.action missing] !!)
@@ -196,6 +356,10 @@
     ?>  (valid-base base.new)
     ?>  (valid-landing landing.new)
     `state(settings new, log (add-log 'Settings saved.'))
+      %hosting
+    ?>  (valid-base base.action)
+    ?>  (valid-landing landing.action)
+    `state(settings [base.action landing.action], visitor-pool pool.action, log (add-log 'Hosting settings saved.'))
   ==
 ::
 ::  the moons of .ships in the pool, in order
@@ -306,6 +470,15 @@
 ++  agent
   |=  [=wire =sign:agent:gall]
   ^-  (quip card _state)
+  ?:  ?=([?(%ship-kiln %ship-profile-updates %ship-profile %ship-pair-request) *] wire)
+    =^  cards  controlled  (agent:~(. control [bowl controlled]) wire sign)
+    [cards state]
+  ?:  |(?=([%full-status *] wire) ?=([%ship-apps @ ~] wire) ?=([%full-result @ ~] wire) ?=([%full-ask @ ~] wire) ?=([%ship-configure @ ~] wire))
+    =/  fc  ~(. manor-pool [bowl full])
+    =/  work  (receive:fc wire sign)
+    =/  cards=(list card:agent:gall)  -.work
+    =/  next=managed-pool:manor  +.work
+    [cards state(full next)]
   ?:  ?=([%reset @ ~] wire)
     ?.  ?=(%poke-ack -.sign)  `state
     ?~  p.sign  `state
@@ -350,6 +523,21 @@
     ^-  (list card)
     (give-simple-payload:app:server eyre-id simple-payload)
   ?.  =('GET' method.request.req)  [(give [[405 ~] ~]) state]
+  ?:  |(=("/apps/manor/public/full/" (scag 24 pat)) =("/apps/manor/public/managed/" (scag 27 pat)))
+    =/  fc  ~(. manor-pool [bowl full])
+    =/  origin  (origin:fc req ?:(=(visitor-pool %ships) base.settings ''))
+    ?~  origin  [(give (page 404 'Nothing here.' 'This address is not available.')) state]
+    ?:  |(=(pat "/apps/manor/public/full/assign") =(pat "/apps/manor/public/managed/assign"))
+      =^  cards  full  (assign-at:fc eyre-id req u.origin)
+      [cards state]
+    =/  prefix
+      ?:  =("/apps/manor/public/full/" (scag 24 pat))  "/apps/manor/public/full/enter/"
+      "/apps/manor/public/managed/enter/"
+    ?.  =(prefix (scag (lent prefix) pat))  [(give [[404 ~] ~]) state]
+    =/  who  (slaw %p (crip (slag (lent prefix) pat)))
+    ?~  who  [(give [[404 ~] ~]) state]
+    =^  cards  full  (enter-at:fc eyre-id req u.who (get-header:http 'ticket' args) u.origin)
+    [cards state]
   ?:  ?|  =(pat "/apps/manor/public")
           =(pat "/apps/manor/public/")
           =(pat "/apps/manor/public/gate/")
@@ -357,7 +545,13 @@
     [(give (file-payload /web/gate/html 'text/html')) state]
   ?:  =(pat "/apps/manor/public/trolley.png")
     [(give (file-payload /web/trolley/png 'image/png')) state]
-  ?:  =(pat "/apps/manor/public/assign")  (assign eyre-id req)
+  ?:  =(pat "/apps/manor/public/assign")
+    ?.  =(%ships visitor-pool)  (assign eyre-id req)
+    =/  fc  ~(. manor-pool [bowl full])
+    =/  origin  (origin:fc req base.settings)
+    ?~  origin  [(give [[403 ~] ~]) state]
+    =^  cards  full  (assign-at:fc eyre-id req u.origin)
+    [cards state]
   ?:  =(pat "/apps/manor/public/tls-ask")
     =/  ok  (allow-certificate (get-header:http 'domain' args))
     [(give [[?:(ok 200 403) ~] ~]) state]
@@ -366,6 +560,12 @@
   ?.  =(enter-at (scag (lent enter-at) pat))  [(give nothing) state]
   =/  who  (slaw %p (crip (slag (lent enter-at) pat)))
   ?~  who  [(give nothing) state]
+  ?:  &(=(%ships visitor-pool) (~(has by ships.full) u.who))
+    =/  fc  ~(. manor-pool [bowl full])
+    =/  origin  (origin:fc req base.settings)
+    ?~  origin  [(give [[403 ~] ~]) state]
+    =^  cards  full  (enter-at:fc eyre-id req u.who (get-header:http 'ticket' args) u.origin)
+    [cards state]
   (enter eyre-id req u.who (get-header:http 'ticket' args))
 ::
 ::  +assign: claim a free, ready moon for a visitor and send them to it
@@ -531,6 +731,7 @@
   ?.  &((gth len tln) =(tail (rsh [3 (sub len tln)] u.domain)))  |
   =/  who  (slaw %p (cat 3 '~' (end [3 (sub len tln)] u.domain)))
   ?~  who  |
+  ?:  =(%ships visitor-pool)  (~(has by ships.full) u.who)
   (~(has by pool) u.who)
 ::
 ++  has-moon-cookie
@@ -618,6 +819,14 @@
       ==
     ::
       [%pool a+(turn ~(tap by pool) pool-row)]
+      [%managed (json-state:~(. manor-pool [bowl full]) =(%ships visitor-pool))]
+      ['visitorPool' s+visitor-pool]
+      [%controlled controlled-json]
+      :-  'pairRequests'
+      :-  %a
+      %+  turn  ~(tap by pair-requests)
+      |=  [who=ship at=@da]
+      (pairs:enjs:format ~[[%ship s+(scot %p who)] [%at (ms at)]])
       [%front ?~(front ~ (ms u.front))]
       [%host s+(scot %p our.bowl)]
       [%eyre (numb:enjs:format -:.^([@ud (unit @ud)] %e /(scot %p our.bowl)/ports/(scot %da now.bowl)))]
@@ -627,6 +836,20 @@
       %+  turn  log
       |=  [at=@da text=@t]
       (pairs:enjs:format ~[[%at (ms at)] [%text s+text]])
+  ==
+::
+++  controlled-json
+  ^-  json
+  =/  c  snapshot:~(. control [bowl controlled])
+  %-  pairs:enjs:format
+  :~  [%controller ?~(controller.c ~ s+(scot %p u.controller.c))]
+      [%landing s+landing.c]
+      [%required a+(turn ~(tap in required.c) |=(d=desk s+d))]
+      [%ready b+ready.c]
+      [%busy b+busy.c]
+      [%profile ?~(profile.c ~ u.profile.c)]
+      [%generation (numb:enjs:format generation.c)]
+      [%apps inventory-json:~(. control [bowl controlled])]
   ==
 ::
 ++  pool-row
