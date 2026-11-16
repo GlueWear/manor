@@ -97,17 +97,31 @@ still expire after two minutes; that does not evict an entered visitor.
 
 The updated generated Caddyfile serves a small, full-window visitor wrapper
 on managed ship app pages. Apps and their traffic still go directly to the
-ship. The wrapper sends one open notification and a close beacon, with no
-heartbeat or periodic polling. App navigation and refresh do not release the ship;
+ship. The wrapper sends an open notification, a close beacon, and one small
+connection heartbeat per minute using the existing open route. There is no
+fleet/status polling and heartbeats do not trigger admin-page refreshes. Four
+minutes without a heartbeat retires that tab; the normal 30-second final-tab
+grace then applies. App navigation and refresh do not release the ship;
 each top-level tab has a separate identity. Closing the last one starts a
 30-second grace period. Opening a new tab during that period cancels it.
 Only confirmed session revocation makes the ship free again. No apps,
 files, profiles or networking keys are erased or changed.
 
+A successful login starts a four-minute first-page registration grace period.
+The first valid open notification cancels it. If no page registers, normal
+confirmed logout and its offline/busy retry policy apply. A close beacon that
+arrives before its open notification uses the shorter 30-second close grace.
+On upgrade/reload, existing entered visits with no previously seen tabs and no
+deadline receive a fresh four-minute grace period. Reloads do not extend an
+already armed deadline, and already tracked visitors are not enrolled this way.
+
 Close signals and timers are bound to the current visit generation. Old
 tabs cannot unlock a newer visitor's reservation. A browser crash or an OS
-shutdown may not deliver a close signal, so manual **Unlock** remains the
-fallback. Failed or indeterminate revocation leaves the ship claimed.
+shutdown may not deliver a close signal; the connection lease recovers that case
+for newly opened visitor pages. Older pages retain their existing behavior until
+reloaded. Manual **Unlock** remains available. Failed or indeterminate revocation
+leaves the ship claimed and automatic cleanup retries once per minute, or when
+the ship reports that it is available again.
 The page shows **closing**, then **unlocking**, then **free** as pushed
 updates.
 
@@ -121,12 +135,14 @@ voice calls without input do not count as activity. Cross-origin embedded
 pages cannot expose their input; use **Stay connected** when warned.
 
 Policy and ending events are pushed over an authenticated event stream.
-There is no heartbeat; input reports are throttled and a single state read
+Connection heartbeats never extend this human-activity deadline. Input reports
+are throttled and a single state read
 checks expiry if a push was missed. Reconnecting the stream never extends
 a visit. Expiry asks connected, current wrappers to remove their app frames,
 requests Eyre session revocation, and holds the claim until that revocation
 is confirmed. This does not revoke credentials issued by external services.
-An offline ship or failed revocation remains unavailable for manual Unlock.
+An offline ship or failed revocation remains unavailable until a queued retry
+confirms logout. Stopping one managed ship does not release or block another.
 
 Update Manor and reload the newly generated Caddyfile before enabling idle
 eviction. All open tabs must support the warning/activity protocol: old
@@ -138,6 +154,12 @@ Existing visits are not enrolled or evicted during upgrade. This feature
 starts with new assignments after updating Manor and reloading the generated
 Caddyfile. The optional virtual Theseus fleet keeps its existing manual
 release/reset behavior.
+
+Profile updates no longer occupy the login/logout work slot. The confirmed
+profile result carries the ship's fresh status, so saving a name or picture
+does not require Unlock to restore readiness and does not change a visitor's
+reservation. State %9 preserves the %8 pool, visits and idle configuration;
+only newly opened wrappers opt into connection leases.
 
 Unlock signs out owner sessions and frees the claim only after revocation
 is confirmed. Apps, files, profiles and networking keys remain unchanged.

@@ -48,6 +48,19 @@ no idle eviction unless the owner enables **Auto-unlock idle visitors** in
 warning and **Stay connected** button. Real input in any tracked app tab
 extends the whole visit. New Manor-assigned managed visits also unlock
 after the last tab closes, with a 30-second reconnect grace period.
+New visitor pages also send a small connection heartbeat once per minute.
+Four minutes without a heartbeat retires that tab, so a lost close notification
+does not hold a ship forever. Heartbeats never count as human activity or extend
+the optional idle deadline. They do not refresh the admin page.
+After a successful login, the first visitor page has four minutes to register.
+If it never does, Manor requests logout instead of keeping an unused reservation
+forever. Reloading also gives existing never-registered visits this grace period;
+already tracked visits are unchanged.
+
+Name and picture changes run independently of visitor login/logout and preserve
+the ship's free/in-use state. Automatic logout waits for busy or offline ships
+and retries once per minute until logout is confirmed; it never frees a ship
+merely because a request timed out.
 
 The page opens on **Ships**. Each ship's settings button selects its
 landing app from that ship's running web apps. Extra readiness dependencies

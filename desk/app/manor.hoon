@@ -113,18 +113,31 @@
       =settings:manor
       log=(list [at=@da text=@t])
       front=(unit @da)
+      full=managed-pool-8:manor
+      controlled=local-state:manor-ship
+      pair-requests=(map ship @da)
+      visitor-pool=?(%ships %theseus)
+  ==
++$  state-9
+  $:  %9
+      pool=(map ship path)
+      fleet=(unit [name=@tas snapshot=path])
+      claims=(map ship claim:manor)
+      =settings:manor
+      log=(list [at=@da text=@t])
+      front=(unit @da)
       full=managed-pool:manor
       controlled=local-state:manor-ship
       pair-requests=(map ship @da)
       visitor-pool=?(%ships %theseus)
   ==
-+$  versioned-state  $%(state-0 state-1 state-2 state-3 state-4 state-5 state-6 state-7 state-8)
++$  versioned-state  $%(state-0 state-1 state-2 state-3 state-4 state-5 state-6 state-7 state-8 state-9)
 +$  card  card:agent:gall
 ::  how long a one-time link to a moon works
 ::
 ++  ticket-life  ~m2
 --
-=|  state-8
+=|  state-9
 =*  state  -
 =<
 %-  agent:dbug
@@ -146,19 +159,20 @@
   ^-  (quip card _this)
   =/  got  !<(versioned-state old)
   =/  fallback=local-state:manor-ship
-    ?:  |(=(%3 -.got) =(%4 -.got) =(%5 -.got) =(%6 -.got) =(%7 -.got) =(%8 -.got))  initial:manor-ship
+    ?:  |(=(%3 -.got) =(%4 -.got) =(%5 -.got) =(%6 -.got) =(%7 -.got) =(%8 -.got) =(%9 -.got))  initial:manor-ship
     bootstrap:~(. control [bowl initial:manor-ship])
-  =/  loaded=state-8
+  =/  loaded=state-9
     ?-  -.got
-      %8  got
-      %7  [%8 pool.got fleet.got claims.got settings.got log.got front.got (migrate-managed-7:manor full.got) controlled.got pair-requests.got visitor-pool.got]
-      %6  [%8 pool.got fleet.got claims.got settings.got log.got front.got (migrate-managed-6:manor full.got) controlled.got pair-requests.got visitor-pool.got]
-      %5  [%8 pool.got fleet.got claims.got settings.got log.got front.got (migrate-managed-5:manor full.got) controlled.got pair-requests.got %theseus]
-      %4  [%8 pool.got fleet.got claims.got settings.got log.got front.got (migrate-managed:manor full.got) controlled.got pair-requests.got %theseus]
-      %3  [%8 pool.got fleet.got claims.got settings.got log.got front.got (migrate-managed:manor full.got) controlled.got ~ %theseus]
-      %2  [%8 pool.got fleet.got claims.got settings.got log.got front.got (migrate-pool:manor full.got) fallback ~ %theseus]
-      %1  [%8 pool.got fleet.got claims.got settings.got log.got front.got *managed-pool:manor fallback ~ %theseus]
-      %0  [%8 pool.got fleet.got claims.got settings.got log.got ~ *managed-pool:manor fallback ~ %theseus]
+      %9  got
+      %8  [%9 pool.got fleet.got claims.got settings.got log.got front.got (migrate-managed-8:manor full.got) controlled.got pair-requests.got visitor-pool.got]
+      %7  [%9 pool.got fleet.got claims.got settings.got log.got front.got (migrate-managed-7:manor full.got) controlled.got pair-requests.got visitor-pool.got]
+      %6  [%9 pool.got fleet.got claims.got settings.got log.got front.got (migrate-managed-6:manor full.got) controlled.got pair-requests.got visitor-pool.got]
+      %5  [%9 pool.got fleet.got claims.got settings.got log.got front.got (migrate-managed-5:manor full.got) controlled.got pair-requests.got %theseus]
+      %4  [%9 pool.got fleet.got claims.got settings.got log.got front.got (migrate-managed:manor full.got) controlled.got pair-requests.got %theseus]
+      %3  [%9 pool.got fleet.got claims.got settings.got log.got front.got (migrate-managed:manor full.got) controlled.got ~ %theseus]
+      %2  [%9 pool.got fleet.got claims.got settings.got log.got front.got (migrate-pool:manor full.got) fallback ~ %theseus]
+      %1  [%9 pool.got fleet.got claims.got settings.got log.got front.got *managed-pool:manor fallback ~ %theseus]
+      %0  [%9 pool.got fleet.got claims.got settings.got log.got ~ *managed-pool:manor fallback ~ %theseus]
     ==
   =/  resumed  resume:~(. manor-pool [bowl full.loaded])
   =/  local  resume:~(. control [bowl controlled.loaded])
@@ -191,7 +205,8 @@
         (public:hc id.req req.req)
       [(give-simple-payload:app:server id.req (serve:hc req.req)) state]
     ==
-  [?:(=(old state) cards (snoc cards state-signal:hc)) this]
+  ::  Connection renewals must not make every admin page fetch the whole pool.
+  [?:(=(old(pulses.full ~) state(pulses.full ~)) cards (snoc cards state-signal:hc)) this]
 ::
 ++  on-watch
   |=  =path
@@ -228,7 +243,7 @@
 ++  on-arvo
   |=  [=wire =sign-arvo]
   ^-  (quip card _this)
-  ?:  ?=([?(%ship-http %ship-timeout) *] wire)
+  ?:  ?=([?(%ship-http %ship-timeout %ship-profile-timeout) *] wire)
     =^  cards  controlled  (arvo:~(. control [bowl controlled]) wire sign-arvo)
     [(snoc cards state-signal:hc) this]
   ?:  ?=([%full-timeout @ ~] wire)
@@ -245,6 +260,18 @@
     =^  cards  full
       (idle-expire:~(. manor-pool [bowl full]) (slav %p i.t.wire) `@uvH`(slav %uv i.t.t.wire) (slav %ud i.t.t.t.wire))
     [(snoc cards state-signal:hc) this]
+  ?:  ?=([%visit-pulse @ @ @ ~] wire)
+    ?>  ?=([%behn %wake ~] sign-arvo)
+    =/  old  state
+    =^  cards  full
+      (expire-pulses:~(. manor-pool [bowl full]) (slav %p i.t.wire) `@uvH`(slav %uv i.t.t.wire) (slav %ud i.t.t.t.wire))
+    [?:(=(old(pulses.full ~) state(pulses.full ~)) cards (snoc cards state-signal:hc)) this]
+  ?:  ?=([%release-retry @ @ ~] wire)
+    ?>  ?=([%behn %wake ~] sign-arvo)
+    =/  old  state
+    =^  cards  full
+      (retry-release:~(. manor-pool [bowl full]) (slav %p i.t.wire) (slav %da i.t.t.wire))
+    [?:(=(old(releases.full ~) state(releases.full ~)) cards (snoc cards state-signal:hc)) this]
   ?:  ?=([%bind ~] wire)  `this
   (on-arvo:def wire sign-arvo)
 ::

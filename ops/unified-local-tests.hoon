@@ -69,6 +69,17 @@
 =/  profile  (act:~(. control [b revoked]) [%profile 'test-1' ``'Pilot' ``'https://example.com/picture.png'])
 =/  first  (snag 0 -.profile)
 ?>  ?=([%pass * %agent * %poke-as %noltbook-api *] first)
+?>  =(~ pending:+.profile)
+=/  profile-status  snapshot:~(. control [b +.profile])
+?<  busy.profile-status
+~|  %profile-confirmation-includes-authoritative-status
+=/  wire  -.+.first
+=/  replied  (agent:~(. control [b +.profile]) wire [%poke-ack ~])
+=/  fact  (snag 0 -.replied)
+?>  ?=([%give %fact *] fact)
+=/  reply  !<(reply:manor-ship +.+.+.+.fact)
+?>  ?=([* %profile-status *] reply)
+?<  busy.snapshot.result.reply
 ~|  %reload-fails-in-flight-work-without-freeing-any-pool
 =/  restored  resume:~(. control [b +.profile])
 ?>  =(~ pending:+.restored)

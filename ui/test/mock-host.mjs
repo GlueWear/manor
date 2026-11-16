@@ -161,12 +161,13 @@ function apply(action) {
       if (appConfigProblem(value)) return 'bad managed configuration';
       row.landing = value.landing; row.required = value.required;
     } else if (kind === 'ship-profile') {
+      if (row.profilePending) return 'profile already pending';
       if (!row.online || 'upload' in value || ('name' in value && value.name !== null && typeof value.name !== 'string') || ('avatar' in value && value.avatar !== null && externalAvatarProblem(value.avatar))) return 'bad profile';
       const failure = profileFailure;
       profileFailure = null;
-      row.pending = 'profile';
+      row.profilePending = true;
       setTimeout(() => {
-        row.pending = null; row.fault = failure;
+        row.profilePending = false; row.fault = failure;
         if (!failure) {
           row.profile ||= {displayName: null, avatar: null};
           if ('name' in value) row.profile.displayName = value.name;

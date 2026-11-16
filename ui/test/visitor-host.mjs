@@ -5,7 +5,7 @@ import {once} from 'node:events';
 const html = await readFile(new URL('../../desk/web/visit.html', import.meta.url), 'utf8');
 
 export async function createVisitorHost() {
-  const state = {opened: [], closed: [], pages: [], activity: [], reads: 0, refused: false, minutes: 0, now: Date.now(), expiresAt: null, revision: 0, ending: false, clients: new Set()};
+  const state = {opened: [], closed: [], pages: [], activity: [], heartbeats: [], reads: 0, refused: false, minutes: 0, now: Date.now(), expiresAt: null, revision: 0, ending: false, clients: new Set()};
   state.policy = () => ({enabled: state.minutes > 0, minutes: state.minutes, warningSeconds: 60, now: state.now, expiresAt: state.expiresAt, revision: state.revision});
   state.broadcast = (name = 'policy', value = state.policy()) => {
     for (const res of state.clients) res.write(`event: ${name}\ndata: ${JSON.stringify(value)}\n\n`);
@@ -28,6 +28,9 @@ export async function createVisitorHost() {
         state.ending = true; state.broadcast('ending', null); res.writeHead(403); res.end(); return;
       }
       if (op === 'open' && state.refused) {res.writeHead(403); res.end(); return;}
+      if (op === 'open' && req.headers['x-manor-heartbeat'] === '1') {
+        state.heartbeats.push(tab); res.writeHead(204); res.end(); return;
+      }
       if (op === 'events') {
         res.writeHead(200, {'Content-Type': 'text/event-stream'});
         res.write(`event: policy\ndata: ${JSON.stringify(state.policy())}\n\n`);

@@ -94,7 +94,8 @@
   ?=([~ %.y] checked)
 ++  snapshot
   ^-  status:manor-ship
-  [our.bowl controller port landing required landing-ready ?=(^ pending) generation own-profile]
+  =/  busy=?  ?~(pending | !=(%profile op.u.pending))
+  [our.bowl controller port landing required landing-ready busy generation own-profile]
 ++  signal-status
   ^-  card
   [%give %fact ~[/status] %noun !>(snapshot)]
@@ -114,8 +115,8 @@
     [(weld kicks (weld watches announce)) state]
   ?>  authorized
   ?:  ?=([%report ~] a)  [~[signal-status] state]
-  ?>  =(~ pending)
   ?:  ?=([%configure *] a)
+    ?>  =(~ pending)
     ?>  (lte ~(wyt in required.a) 32)
     =.  landing  landing.a
     =.  required  (~(put in required.a) landing.a)
@@ -136,12 +137,12 @@
           ~  ~
       ==
     =.  serial  +(serial)
-    =.  pending  `[rid %profile %profile serial (add now.bowl ~s30)]
+    =/  deadline  (add now.bowl ~s30)
     :_  state
-    :~  [%pass /ship-profile/(scot %ud serial) %agent [our.bowl %noltbook] %poke-as %noltbook-api noun+!>(update)]
-        timeout-card
-        signal-status
+    :~  [%pass /ship-profile/[rid]/(scot %ud serial)/(scot %da deadline) %agent [our.bowl %noltbook] %poke-as %noltbook-api noun+!>(update)]
+        [%pass /ship-profile-timeout/[rid]/(scot %ud serial)/(scot %da deadline) %arvo %b %wait deadline]
     ==
+  ?>  =(~ pending)
   ?:  &(?=([%session *] a) !landing-ready)
     :_  state
     :~  [%give %fact ~[pax] %noun !>(`reply:manor-ship`[rid %error 'Landing desks are not running.'])]
@@ -183,6 +184,14 @@
       [%pass /ship-timeout/(scot %ud serial.j) %arvo %b %rest deadline.j]
       signal-status
   ==
+++  finish-profile
+  |=  [rid=@ta seq=@ud deadline=@da result=result:manor-ship]
+  ^-  (quip card local-state:manor-ship)
+  :_  state
+  :~  [%give %fact ~[/result/[rid]] %noun !>(`reply:manor-ship`[rid result])]
+      [%give %kick ~[/result/[rid]] ~]
+      [%pass /ship-profile-timeout/[rid]/(scot %ud seq)/(scot %da deadline) %arvo %b %rest deadline]
+  ==
 ++  agent
   |=  [=wire =sign:agent:gall]
   ^-  (quip card local-state:manor-ship)
@@ -196,6 +205,11 @@
       ?.  =(our.bowl +<.upd)  `state
       [~[signal-status] state]
     [(weld watches ~[signal-status [%give %fact ~[/apps] %noun !>(inventory)]]) state]
+  ?:  ?=([%ship-profile @ @ @ ~] wire)
+    ?.  ?=(%poke-ack -.sign)  `state
+    =/  result=result:manor-ship
+      ?^(p.sign [%error 'Noltbook refused the profile update.'] [%profile-status snapshot])
+    (finish-profile i.t.wire (slav %ud i.t.t.wire) (slav %da i.t.t.t.wire) result)
   ?:  =(~ pending)  `state
   =/  j  (need pending)
   ?.  &(=(wire /ship-profile/(scot %ud serial.j)) ?=(%poke-ack -.sign))  `state
@@ -204,6 +218,9 @@
 ++  arvo
   |=  [=wire sign=sign-arvo]
   ^-  (quip card local-state:manor-ship)
+  ?:  ?=([%ship-profile-timeout @ @ @ ~] wire)
+    ?.  ?=([%behn %wake ~] sign)  `state
+    (finish-profile i.t.wire (slav %ud i.t.t.wire) (slav %da i.t.t.t.wire) [%error 'Profile confirmation timed out; the ship remains available.'])
   ?:  =(~ pending)  `state
   =/  j  (need pending)
   ?:  &(=(wire /ship-timeout/(scot %ud serial.j)) ?=([%behn %wake *] sign))

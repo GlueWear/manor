@@ -34,7 +34,7 @@ export default function ManagedShips({manor, busy, run, Identity}) {
   const modalRequest = modal && requests.find(row => row.ship === modal.row.ship && row.at === modal.row.at);
   const unavailable = modal?.kind === 'ship-approve'
     ? !modalRequest || modalRow?.claim || modalRow?.pending
-    : !modalRow || (modal?.kind !== 'ship-forget' && (modalRow.pending || (['ship-profile', 'ship-unlock'].includes(modal?.kind) && !modalRow.online) || (['endpoint', 'ship-configure', 'ship-upgrade', 'ship-remove'].includes(modal?.kind) && modalRow.claim)));
+    : !modalRow || (modal?.kind !== 'ship-forget' && (modalRow.pending || (['ship-profile', 'ship-remove', 'ship-upgrade', 'endpoint'].includes(modal?.kind) && modalRow.profilePending) || (['ship-profile', 'ship-unlock'].includes(modal?.kind) && !modalRow.online) || (['endpoint', 'ship-configure', 'ship-upgrade', 'ship-remove'].includes(modal?.kind) && modalRow.claim)));
   const command = (kind, value) => {setError(''); return run({[kind]: value}, '', 'The host refused the managed-ship request.', setError);};
   function open(kind, row) {
     setError(''); setModal({kind, row});
@@ -96,7 +96,7 @@ export default function ManagedShips({manor, busy, run, Identity}) {
         const status = managedShipStatus(row);
         const address = row.endpoint ? `${row.endpoint.secure ? 'https' : 'http'}://${row.endpoint.host}:${row.endpoint.port}` : row.port ? `127.0.0.1:${row.port}` : 'Awaiting web port';
         return <tr key={row.ship}>
-          <td><Identity ship={row.ship} profile={{name: row.profile?.displayName, avatar: row.profile?.avatar}} edit={() => open('ship-profile', row)} disabled={busy || !!row.pending || !row.online}/>
+          <td><Identity ship={row.ship} profile={{name: row.profile?.displayName, avatar: row.profile?.avatar}} edit={() => open('ship-profile', row)} disabled={busy || !!row.pending || !!row.profilePending || !row.online}/>
             <small className="managed-port">Landing: {row.landing || 'Awaiting status'}</small>
             <small className="managed-port">{address}</small>
             <div className="mobile-status"><span className={`badge ${status.tone}`} title={status.detail}>{status.label}</span></div>

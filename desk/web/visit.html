@@ -49,16 +49,17 @@ progress{display:block;width:100%;height:8px;margin:0 0 20px;accent-color:#245a4
   let tab = '', generation = 0, leaving = false, ended = false, source;
   let enabled = false, cutoff = Infinity, warnSeconds = 60;
   let warningTimer, deadlineTimer, countdownTimer, activityTimer;
+  let heartbeatTimer, heartbeatBusy = false, registered = false;
   let lastReport = -Infinity, reporting = false, queuedStay = false;
   let policyRevision = -1;
   const observed = new WeakSet();
   const identity = () => Array.from(crypto.getRandomValues(new Uint8Array(16)), b => b.toString(16).padStart(2, '0')).join('');
   const payload = () => `${tab}:${visit}`;
   const query = () => new URLSearchParams({tab, visit});
-  const headers = {'x-manor-client': '2'};
+  const headers = {'x-manor-client': '2', 'x-manor-liveness': '1'};
 
   function clearTimers() {
-    for (const timer of [warningTimer, deadlineTimer, countdownTimer, activityTimer]) clearTimeout(timer);
+    for (const timer of [warningTimer, deadlineTimer, countdownTimer, activityTimer, heartbeatTimer]) clearTimeout(timer);
     activityTimer = null;
   }
 
@@ -146,6 +147,25 @@ progress{display:block;width:100%;height:8px;margin:0 0 20px;accent-color:#245a4
     });
   }
 
+  // Connection liveness is independent of human activity and idle eviction.
+  async function heartbeat() {
+    if (ended || leaving || heartbeatBusy || !registered || !tab) return;
+    const expected = generation;
+    heartbeatBusy = true;
+    clearTimeout(heartbeatTimer);
+    try {
+      const signal = typeof AbortSignal?.timeout === 'function' ? AbortSignal.timeout(10000) : undefined;
+      const res = await fetch('/~manor/visit/open', {method: 'POST', headers: {...headers, 'x-manor-heartbeat': '1'}, body: payload(), credentials: 'same-origin', signal});
+      if (expected === generation && [401, 403, 409, 410].includes(res.status)) end();
+    } catch { /* A temporary network failure gets a reconnect grace period. */ }
+    finally {
+      if (expected === generation && !ended && !leaving) {
+        heartbeatBusy = false;
+        heartbeatTimer = setTimeout(heartbeat, 60000);
+      }
+    }
+  }
+
   async function report(force = false) {
     if (!enabled || ended || leaving) return;
     if (reporting) {queuedStay ||= force; return;}
@@ -213,6 +233,9 @@ progress{display:block;width:100%;height:8px;margin:0 0 20px;accent-color:#245a4
     reporting = false;
     queuedStay = false;
     lastReport = -Infinity;
+    clearTimeout(heartbeatTimer);
+    heartbeatBusy = false;
+    registered = false;
     stay.disabled = false;
     if (!tab) tab = identity();
     const expected = ++generation;
@@ -231,6 +254,8 @@ progress{display:block;width:100%;height:8px;margin:0 0 20px;accent-color:#245a4
       if (expected !== generation || ended || leaving) return;
       policy(value);
       events();
+      registered = true;
+      heartbeatTimer = setTimeout(heartbeat, 60000);
       if (!frame.hasAttribute('src')) frame.src = location.href;
       frame.hidden = false;
       status.hidden = true;
@@ -245,7 +270,8 @@ progress{display:block;width:100%;height:8px;margin:0 0 20px;accent-color:#245a4
   retry.addEventListener('click', open);
   stay.addEventListener('click', () => report(true));
   warning.addEventListener('cancel', event => {event.preventDefault(); report(true);});
-  addEventListener('online', () => {if (!ended && !leaving) checkState();});
+  addEventListener('online', () => {if (!ended && !leaving) {checkState(); heartbeat();}});
+  document.addEventListener('visibilitychange', () => {if (!document.hidden && !ended && !leaving) heartbeat();});
   addEventListener('pagehide', close);
   addEventListener('pageshow', event => {
     if (!event.persisted) return;

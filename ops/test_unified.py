@@ -39,7 +39,8 @@ class UnifiedSourceTests(unittest.TestCase):
         app = (self.root / "desk/app/manor.hoon").read_text()
         self.assertIn("(pair-request:hc src.bowl)", app)
         self.assertIn("(gte ~(wyt by pair-requests) 64)", app)
-        self.assertIn("%8  got", app)
+        self.assertIn("%9  got", app)
+        self.assertIn("migrate-managed-8:manor full.got", app)
         local = (self.root / "desk/lib/manor-ship.hoon").read_text()
         watches = local.split("++  watches\n", 1)[1].split("++  port\n", 1)[0]
         self.assertNotIn("announce", watches)

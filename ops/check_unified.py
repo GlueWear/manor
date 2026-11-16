@@ -59,7 +59,7 @@ def source(root, component="agent", tests=False):
     if tests:
         checks = (root / ("ops/unified-" + component + "-tests.hoon")).read_text()
         if component == "pool":
-            checks = checks.removesuffix("0\n") + (root / "ops/visitor-tests.hoon").read_text().removesuffix("0\n") + (root / "ops/idle-tests.hoon").read_text()
+            checks = checks.removesuffix("0\n") + (root / "ops/visitor-tests.hoon").read_text().removesuffix("0\n") + (root / "ops/idle-tests.hoon").read_text().removesuffix("0\n") + (root / "ops/liveness-tests.hoon").read_text()
         code += checks
     else:
         value = {"agent": "ctor", "local": "control", "pool": "manor-pool"}[component]

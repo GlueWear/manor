@@ -175,6 +175,11 @@
 ?>  =(`now.b entered.claim)
 ?>  =(~ requests.used)
 ?>  =(~ pending:(~(got by ships.used) moon))
+~|  %successful-login-arms-first-page-registration-grace
+=/  first-page  (~(got by visits.used) moon)
+?>  =(`(add now.b ~m4) deadline.first-page)
+?>  =(~ seen.first-page)
+?>  =([%pass (visit-wire:~(. manor-pool [b used]) moon first-page) %arvo %b %wait (add now.b ~m4)] (snag 2 -.success))
 ~|  %status-refresh-never-frees-an-active-visitor
 =/  reconnected-used  (reconnect:~(. manor-pool [subscribed used]) moon)
 ?>  =(expected -.reconnected-used)
@@ -241,15 +246,43 @@
 =/  old-wire  /full-status/(scot %p moon)
 =/  subscribed  b(wex (~(put by wex.b) [old-wire moon %manor-moon] [& /status]))
 =/  forgotten-legacy  (forget:~(. manor-pool [subscribed legacy]) moon)
-?>  =(2 (lent -.forgotten-legacy))
-?>  =([%pass old-wire %agent [moon %manor-moon] %leave ~] (snag 1 -.forgotten-legacy))
+?>  =(3 (lent -.forgotten-legacy))
+?>  =([%pass (visit-wire:~(. manor-pool [b used]) moon first-page) %arvo %b %rest (add now.b ~m4)] (snag 0 -.forgotten-legacy))
+?>  =([%pass old-wire %agent [moon %manor-moon] %leave ~] (snag 2 -.forgotten-legacy))
 ?>  =(~ claims:+.forgotten-legacy)
 ~|  %profile-result-keeps-claim-and-completes-async-work
 =/  updating  +:(profile:~(. manor-pool [b used]) moon ``'Pilot' ~)
+?>  =(~ pending:(~(got by ships.updating) moon))
+?>  (available:~(. manor-pool [b updating]) (~(got by ships.updating) moon))
 =/  updated
   +:(receive:~(. manor-pool [b updating]) /full-result/manor-3 [%fact [%noun !>(`reply:manor-ship`['manor-3' %profile ~])]])
 ?>  (~(has by claims.updated) moon)
 ?>  =(~ requests.updated)
+~|  %profile-confirmation-reconciles-stale-busy-status
+=/  busy-row  (~(got by ships.updating) moon)
+=/  stale  updating(ships (~(put by ships.updating) moon busy-row(status `status(busy &))))
+=/  confirmed-profile
+  +:(receive:~(. manor-pool [b stale]) /full-result/manor-3 [%fact [%noun !>(`reply:manor-ship`['manor-3' %profile-status status])]])
+?>  (available:~(. manor-pool [b confirmed-profile]) (~(got by ships.confirmed-profile) moon))
+?>  (~(has by claims.confirmed-profile) moon)
+~|  %successful-profile-retry-clears-its-old-error
+=/  old-error  updating(ships (~(put by ships.updating) moon busy-row(fault `'The profile update timed out.')))
+=/  retried-profile
+  +:(receive:~(. manor-pool [b old-error]) /full-result/manor-3 [%fact [%noun !>(`reply:manor-ship`['manor-3' %profile-status status])]])
+?>  =(~ fault:(~(got by ships.retried-profile) moon))
+~|  %profile-retry-never-clears-an-authentication-failure
+=/  blocked  old-error(ships (~(put by ships.old-error) moon busy-row(blocked &, fault `'Login failed.')))
+=/  still-blocked
+  +:(receive:~(. manor-pool [b blocked]) /full-result/manor-3 [%fact [%noun !>(`reply:manor-ship`['manor-3' %profile-status status])]])
+?>  blocked:(~(got by ships.still-blocked) moon)
+?>  =(`'Login failed.' fault:(~(got by ships.still-blocked) moon))
+~|  %profile-completion-cannot-clear-a-concurrent-unlock
+=/  unlocking  +:(unlock:~(. manor-pool [b updating]) moon)
+=/  concurrent
+  +:(receive:~(. manor-pool [b unlocking]) /full-result/manor-3 [%fact [%noun !>(`reply:manor-ship`['manor-3' %profile-status status(busy &)])]])
+?>  =(`'manor-4' pending:(~(got by ships.concurrent) moon))
+?>  (~(has by claims.concurrent) moon)
+?>  (~(has by requests.concurrent) 'manor-4')
 ~|  %remote-ships-may-share-their-own-web-port
 =/  first
   +:(register:fc ~zod `['one.example' 443 &])

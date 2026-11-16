@@ -35,6 +35,7 @@ test('idle limit warns, Stay connected extends it, and expiry removes the app', 
   await expect(page.locator('main')).toContainText('Your visit has ended');
   await expect(page.locator('iframe')).toHaveCount(0);
   await expect(page.getByRole('link', {name: 'Return to the gate'})).toBeVisible();
+  expect(host.heartbeats.length).toBeGreaterThan(0);
 });
 
 test('input in another app tab refreshes the whole visit and no UI polling occurs', async ({page, context}) => {

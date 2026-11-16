@@ -24,6 +24,7 @@
   $%  [%session cookie=@t]
       [%revoked generation=@ud]
       [%profile profile=(unit json)]
+      [%profile-status snapshot=status]
       [%error reason=@t]
   ==
 +$  reply  [rid=@ta =result]

@@ -291,6 +291,27 @@ test('claims never idle-release; claims and pending work guard destructive chang
   await expect(page.getByRole('dialog').getByRole('button', {name: 'Upgrade', exact: true})).toBeDisabled();
 });
 
+test('profile saves preserve free and in-use status without an unlock', async ({page, request}) => {
+  for (const claim of [null, {entered: 1, expires: null}]) {
+    await request.post(`${MOCK}/managed-fixture`, {data: {ships: [managedRow('~zod', {profile: {displayName: 'Before', avatar: null}, claim})]}});
+    await page.goto('/');
+    const row = rowOf(page, '~zod');
+    const status = claim ? 'in use' : 'free';
+    await expect(row.locator('.status-col .badge')).toHaveText(status);
+    await row.locator('button.ship-link').click();
+    const dialog = page.getByRole('dialog');
+    await dialog.getByLabel('Name', {exact: true}).fill('After');
+    await dialog.getByRole('button', {name: 'Save', exact: true}).click();
+    await expect(dialog).toHaveCount(0);
+    await expect(row.locator('.status-col .badge')).toHaveText(status);
+    await expect(row.getByRole('button', {name: 'Unlock ~zod'})).toBeEnabled();
+    await expect(row.locator('.ship-name strong')).toHaveText('After');
+    await expect(row.locator('.status-col .badge')).toHaveText(status);
+    const state = await (await request.get(`${MOCK}/~/scry/manor/state.json`)).json();
+    expect(state.managed.ships[0].claim).toEqual(claim);
+  }
+});
+
 test('a failed async profile update preserves the claim without demanding an unlock', async ({page, request}) => {
   const claim = {entered: 1, expires: null};
   await request.post(`${MOCK}/managed-fixture`, {data: {ships: [managedRow('~zod', {profile: {displayName: 'Confirmed', avatar: null}, claim})], profileFailure: 'Profile update failed'}});
@@ -301,7 +322,7 @@ test('a failed async profile update preserves the claim without demanding an unl
   await dialog.getByLabel('Name', {exact: true}).fill('Unconfirmed');
   await dialog.getByRole('button', {name: 'Save', exact: true}).click();
   await expect(dialog).toHaveCount(0);
-  await expect(row.locator('.status-col .badge')).toHaveText('saving profile');
+  await expect(row.locator('.status-col .badge')).toHaveText('in use');
   await expect(row.locator('.ship-name strong')).toHaveText('Confirmed');
   await expect(row.locator('.status-col .badge')).toHaveText('needs attention');
   await expect(row).toContainText('Profile update failed');

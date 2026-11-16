@@ -139,7 +139,7 @@
       idle-revision=@ud
       streams=(map @ta @ta)
   ==
-+$  managed-pool
++$  managed-pool-8
   $:  ships=(map ship managed-ship)
       claims=(map ship claim)
       requests=(map @ta managed-request)
@@ -148,6 +148,24 @@
       visits=(map ship visitor)
       idle-minutes=@ud
   ==
++$  pulse
+  $:  tabs=(map @ta @da)
+      deadline=@da
+      revision=@ud
+  ==
++$  release
+  [claim-at=@da deadline=@da]
++$  managed-pool
+  $:  ships=(map ship managed-ship)
+      claims=(map ship claim)
+      requests=(map @ta managed-request)
+      serial=@ud
+      apps=(map ship (list installed-app:manor-ship))
+      visits=(map ship visitor)
+      idle-minutes=@ud
+      pulses=(map ship pulse)
+      releases=(map ship release)
+  ==
 ++  migrate-requests
   |=  old=(map @ta managed-request-5)
   ^-  (map @ta managed-request)
@@ -155,15 +173,15 @@
 ++  migrate-managed
   |=  old=managed-pool-4
   ^-  managed-pool
-  [ships.old claims.old (migrate-requests requests.old) serial.old ~ ~ 0]
+  [ships.old claims.old (migrate-requests requests.old) serial.old ~ ~ 0 ~ ~]
 ++  migrate-managed-5
   |=  old=managed-pool-5
   ^-  managed-pool
-  [ships.old claims.old (migrate-requests requests.old) serial.old apps.old ~ 0]
+  [ships.old claims.old (migrate-requests requests.old) serial.old apps.old ~ 0 ~ ~]
 ++  migrate-managed-6
   |=  old=managed-pool-6
   ^-  managed-pool
-  [ships.old claims.old requests.old serial.old apps.old ~ 0]
+  [ships.old claims.old requests.old serial.old apps.old ~ 0 ~ ~]
 ++  migrate-managed-7
   |=  old=managed-pool-7
   ^-  managed-pool
@@ -172,7 +190,13 @@
       |=  v=visitor-7
       [claim-at.v proof.v tabs.v seen.v deadline.v revision.v ~ ~ 0 ~]
       0
+      ~
+      ~
   ==
+++  migrate-managed-8
+  |=  old=managed-pool-8
+  ^-  managed-pool
+  [ships.old claims.old requests.old serial.old apps.old visits.old idle-minutes.old ~ ~]
 ::  Preserve active legacy connections until their operator switches agents.
 ++  migrate-pool
   |=  old=full-pool
@@ -187,6 +211,8 @@
       ~
       ~
       0
+      ~
+      ~
   ==
 ::  %theseus's restore request ($recycle in its /sur/theseus)
 ::

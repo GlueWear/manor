@@ -37,6 +37,7 @@
   ^-  (quip card managed-pool:manor)
   ?>  (lte (met 0 who) 128)
   ?>  !=(who our.bowl)
+  ?>  !(profile-busy who)
   ?>  ?~(endpoint & (valid-endpoint u.endpoint))
   =/  prior  (~(get by ships.full) who)
   =/  row=managed-ship:manor
@@ -106,15 +107,22 @@
   ?>  (valid-profile:manor-ship name avatar)
   (begin who [%profile name avatar] ~ *@da)
 ::
+++  profile-busy
+  |=  who=ship
+  ^-  ?
+  (lien ~(val by requests.full) |=(r=managed-request:manor &(=(who who.r) =(%profile op.r))))
+::
 ++  remove
   |=  who=ship
   ^-  (quip card managed-pool:manor)
   =/  row  (~(got by ships.full) who)
   ?>  =(~ pending.row)
+  ?>  !(profile-busy who)
   ?>  !(~(has by claims.full) who)
   =^  stopped  full  (drop-visit who)
+  =^  cancelled  full  (clear-release who)
   :_  full(ships (~(del by ships.full) who), apps (~(del by apps.full) who))
-  (weld stopped (weld ~[[%pass /full-status/(scot %p who)/[transport.row] %agent [who transport.row] %leave ~]] (leave-apps who)))
+  (weld cancelled (weld stopped (weld ~[[%pass /full-status/(scot %p who)/[transport.row] %agent [who transport.row] %leave ~]] (leave-apps who))))
 ::
 ++  leave-apps
   |=  who=ship
@@ -130,9 +138,10 @@
   ?~  prior  `full
   =/  row  u.prior
   =^  stopped  full  (drop-visit who)
+  =^  cancelled  full  (clear-release who)
   =/  out  full
   =/  cards=(list card)
-    (weld stopped (weld ~[[%pass /full-status/(scot %p who)/[transport.row] %agent [who transport.row] %leave ~]] (leave-apps who)))
+    (weld cancelled (weld stopped (weld ~[[%pass /full-status/(scot %p who)/[transport.row] %agent [who transport.row] %leave ~]] (leave-apps who))))
   =/  legacy-wire  /full-status/(scot %p who)
   =?  cards  (~(has by wex.bowl) [legacy-wire who %manor-moon])
     (snoc cards [%pass legacy-wire %agent [who %manor-moon] %leave ~])
@@ -174,7 +183,10 @@
     (snoc cards [%pass (visit-wire who u.v) %arvo %b %rest (need deadline.u.v)])
   =?  cards  ?=(^ idle-at.u.v)
     (snoc cards [%pass (idle-wire who u.v) %arvo %b %rest (need idle-at.u.v)])
-  [cards full(visits (~(del by visits.full) who))]
+  =/  pulse  (~(get by pulses.full) who)
+  =?  cards  ?=(^ pulse)
+    (snoc cards [%pass (pulse-wire who u.v u.pulse) %arvo %b %rest deadline.u.pulse])
+  [cards full(visits (~(del by visits.full) who), pulses (~(del by pulses.full) who))]
 ::
 ++  idle-wire
   |=  [who=ship v=visitor:manor]
@@ -226,6 +238,95 @@
   %=  full
     visits  (~(run by visits.full) |=(v=visitor:manor v(streams (~(del by streams.v) id))))
   ==
+::
+++  pulse-wire
+  |=  [who=ship v=visitor:manor p=pulse:manor]
+  ^-  wire
+  /visit-pulse/(scot %p who)/(scot %uv proof.v)/(scot %ud revision.p)
+::
+++  set-pulses
+  |=  [who=ship tabs=(map @ta @da)]
+  ^-  (quip card managed-pool:manor)
+  =/  v  (~(got by visits.full) who)
+  =/  old  (~(get by pulses.full) who)
+  =/  cards=(list card)  ~
+  ?:  =(~ tabs)
+    =?  cards  ?=(^ old)
+      ~[[%pass (pulse-wire who v u.old) %arvo %b %rest deadline.u.old]]
+    [cards full(pulses (~(del by pulses.full) who))]
+  =/  next=@da  (head (sort ~(val by tabs) |=([a=@da b=@da] (lth a b))))
+  =/  changed  ?~(old & !=(next deadline.u.old))
+  =/  revision=@ud  ?~(old 1 (add revision.u.old ?:(changed 1 0)))
+  =/  pulse=pulse:manor  [tabs next revision]
+  =?  cards  &(changed ?=(^ old))
+    ~[[%pass (pulse-wire who v u.old) %arvo %b %rest deadline.u.old]]
+  =?  cards  changed
+    (snoc cards [%pass (pulse-wire who v pulse) %arvo %b %wait next])
+  [cards full(pulses (~(put by pulses.full) who pulse))]
+::
+++  renew-pulse
+  |=  [who=ship tab=@ta]
+  ^-  (quip card managed-pool:manor)
+  =/  old  (~(get by pulses.full) who)
+  =/  tabs=(map @ta @da)  ?~(old ~ tabs.u.old)
+  ::  Four minutes allows missed one-minute heartbeats and reconnection.
+  (set-pulses who (~(put by tabs) tab (add now.bowl ~m4)))
+::
+++  await-first-tab
+  |=  who=ship
+  ^-  (quip card managed-pool:manor)
+  =/  v  (~(get by visits.full) who)
+  =/  c  (~(get by claims.full) who)
+  ?~  v  `full
+  ?~  c  `full
+  ?.  &(=(claim-at.u.v at.u.c) ?=(^ entered.u.c))  `full
+  ?:  |(!=(~ tabs.u.v) !=(~ seen.u.v) ?=(^ deadline.u.v))  `full
+  ::  Login may finish even if the browser never reaches the visitor page.
+  =/  next=visitor:manor
+    [claim-at.u.v proof.u.v tabs.u.v seen.u.v `(add now.bowl ~m4) +(revision.u.v) idle-tabs.u.v idle-at.u.v idle-revision.u.v streams.u.v]
+  :_  full(visits (~(put by visits.full) who next))
+  ~[[%pass (visit-wire who next) %arvo %b %wait (need deadline.next)]]
+::
+++  maybe-close
+  |=  who=ship
+  ^-  (quip card managed-pool:manor)
+  =/  v  (~(got by visits.full) who)
+  ?:  !=(~ tabs.v)  `full
+  =/  until  (add now.bowl ~s30)
+  ?:  ?~(deadline.v | (lte u.deadline.v until))  `full
+  =/  cards=(list card)
+    ?~  deadline.v  ~
+    ~[[%pass (visit-wire who v) %arvo %b %rest u.deadline.v]]
+  =/  next=visitor:manor
+    [claim-at.v proof.v tabs.v seen.v `until +(revision.v) idle-tabs.v idle-at.v idle-revision.v streams.v]
+  :_  full(visits (~(put by visits.full) who next))
+  (snoc cards [%pass (visit-wire who next) %arvo %b %wait (need deadline.next)])
+::
+++  expire-pulses
+  |=  [who=ship proof=@uvH revision=@ud]
+  ^-  (quip card managed-pool:manor)
+  =/  v  (~(get by visits.full) who)
+  =/  pulse  (~(get by pulses.full) who)
+  ?~  v  `full
+  ?~  pulse  `full
+  ?.  &(=(proof proof.u.v) =(revision revision.u.pulse) (gte now.bowl deadline.u.pulse))  `full
+  =/  todo=(list @ta)
+    (turn (skim ~(tap by tabs.u.pulse) |=([tab=@ta until=@da] (lte until now.bowl))) head)
+  =/  alive=(map @ta @da)
+    (malt (skim ~(tap by tabs.u.pulse) |=([tab=@ta until=@da] (gth until now.bowl))))
+  =/  current=visitor:manor  u.v
+  =/  cards=(list card)  ~
+  |-
+  ?^  todo
+    =^  stopped  current  (retire-streams current i.todo)
+    $(todo t.todo, current current(tabs (~(del in tabs.current) i.todo), idle-tabs (~(del in idle-tabs.current) i.todo)), cards (weld cards stopped))
+  =.  full  full(visits (~(put by visits.full) who current))
+  =^  more  full  (set-pulses who alive)
+  =.  cards  (weld cards more)
+  =^  more  full  (idle-refresh who |)
+  =.  cards  (weld cards more)
+  =^  more  full  (maybe-close who)
+  [(weld cards more) full]
 ::
 ++  idle-refresh
   |=  [who=ship reset=?]
@@ -340,45 +441,57 @@
     [(answer eyre-id 400 'Invalid tab identity.') full]
   =/  known  (~(has in seen.v) tab)
   =/  modern  =(`'2' (get-header:http 'x-manor-client' header-list.request.req))
+  =/  liveness  =(`'1' (get-header:http 'x-manor-liveness' header-list.request.req))
+  =/  heartbeat  &(=(%open op) =(`'1' (get-header:http 'x-manor-heartbeat' header-list.request.req)))
   ?:  ?~(idle-at.v | (gte now.bowl u.idle-at.v))
     =/  work  (idle-expire who proof.v idle-revision.v)
     [(weld -.work (answer eyre-id 403 'This visit has ended.')) +.work]
+  ?:  &(=(~ tabs.v) ?~(deadline.v | (gte now.bowl u.deadline.v)))
+    =/  work  (close-visit who proof.v revision.v)
+    [(weld -.work (answer eyre-id 403 'This visit has ended.')) +.work]
+  ?:  heartbeat
+    ?.  &(modern liveness known (~(has in tabs.v) tab))
+      [(answer eyre-id 409 'This tab has closed.') full]
+    =^  cards  full  (renew-pulse who tab)
+    [(weld cards (answer eyre-id 204 '')) full]
   ?:  =(%activity op)
     ?.  &(modern (~(has in idle-tabs.v) tab) (~(has in tabs.v) tab))
       [(answer eyre-id 403 'This tab is not available.') full]
     =^  cards  full  (idle-refresh who &)
     [(weld cards (visitor-answer eyre-id who &)) full]
   ?:  =(%open op)
+    ?:  &(known !(~(has in tabs.v) tab))
+      [(answer eyre-id 409 'This tab has closed.') full]
+    ?:  &(!known (gte ~(wyt in seen.v) 512))
+      [(answer eyre-id 429 'This visit has opened too many tabs.') full]
+    =/  alive=(list card)  ~
+    =^  alive  full  ?.(liveness `full (renew-pulse who tab))
     ?:  known
       ?.  (~(has in tabs.v) tab)  [(answer eyre-id 409 'This tab has closed.') full]
-      ?:  |(!modern (~(has in idle-tabs.v) tab))  [(visitor-answer eyre-id who modern) full]
+      ?:  |(!modern (~(has in idle-tabs.v) tab))  [(weld alive (visitor-answer eyre-id who modern)) full]
       =.  full  full(visits (~(put by visits.full) who v(idle-tabs (~(put in idle-tabs.v) tab))))
       =^  cards  full  (idle-refresh who &)
-      [(weld cards (visitor-answer eyre-id who &)) full]
-    ?:  (gte ~(wyt in seen.v) 512)
-      [(answer eyre-id 429 'This visit has opened too many tabs.') full]
+      [(weld alive (weld cards (visitor-answer eyre-id who &))) full]
     =/  cards=(list card)
       ?~  deadline.v  ~
       ~[[%pass (visit-wire who v) %arvo %b %rest u.deadline.v]]
     =.  v  v(tabs (~(put in tabs.v) tab), seen (~(put in seen.v) tab), deadline ~, revision +(revision.v), idle-tabs ?:(modern (~(put in idle-tabs.v) tab) idle-tabs.v))
     =.  full  full(visits (~(put by visits.full) who v))
     =^  more  full  (idle-refresh who &)
-    [(weld cards (weld more (visitor-answer eyre-id who modern))) full]
+    [(weld alive (weld cards (weld more (visitor-answer eyre-id who modern)))) full]
   ?:  &(known !(~(has in tabs.v) tab))  [(answer eyre-id 204 '') full]
   ::  A close may precede its keepalive open. Do not resurrect that tab.
   ?:  &(!known (gte ~(wyt in seen.v) 512))  [(answer eyre-id 204 '') full]
   =.  v  v(tabs (~(del in tabs.v) tab), seen (~(put in seen.v) tab), idle-tabs (~(del in idle-tabs.v) tab))
   =^  stopped  v  (retire-streams v tab)
   =.  full  full(visits (~(put by visits.full) who v))
+  =/  pulse  (~(get by pulses.full) who)
+  =/  alive=(list card)  ~
+  =^  alive  full  ?~(pulse `full (set-pulses who (~(del by tabs.u.pulse) tab)))
   =^  changed  full  (idle-refresh who |)
-  =/  cards=(list card)  (weld stopped changed)
-  =/  v=visitor:manor  (~(got by visits.full) who)
-  ?:  |(!=(~ tabs.v) ?=(^ deadline.v))
-    [(weld cards (answer eyre-id 204 '')) full]
-  =/  next=visitor:manor
-    [claim-at.v proof.v tabs.v seen.v `(add now.bowl ~s30) +(revision.v) idle-tabs.v idle-at.v idle-revision.v streams.v]
-  :_  full(visits (~(put by visits.full) who next))
-  (weld (snoc cards `card`[%pass (visit-wire who next) %arvo %b %wait (need deadline.next)]) (answer eyre-id 204 ''))
+  =/  cards=(list card)  (weld alive (weld stopped changed))
+  =^  more  full  (maybe-close who)
+  [(weld cards (weld more (answer eyre-id 204 ''))) full]
 ::
 ++  close-visit
   |=  [who=ship proof=@uvH revision=@ud]
@@ -401,10 +514,57 @@
   ?~  c  (drop-visit who)
   ?~  row  (drop-visit who)
   ?.  =(claim-at.u.v at.u.c)  (drop-visit who)
-  ?.  &(online.u.row =(~ pending.u.row))
-    =^  stopped  full  (drop-visit who)
-    [stopped full(ships (~(put by ships.full) who u.row(blocked &, fault `'Automatic unlock was not confirmed. Unlock manually.')))]
+  =^  stopped  full  (drop-visit who)
+  =.  full  full(ships (~(put by ships.full) who u.row(blocked &)))
+  =^  more  full  (queue-release who at.u.c)
+  =^  work  full  (try-release who)
+  [(weld stopped (weld more work)) full]
+::
+++  release-wire
+  |=  [who=ship at=@da]
+  ^-  wire
+  /release-retry/(scot %p who)/(scot %da at)
+::
+++  clear-release
+  |=  who=ship
+  ^-  (quip card managed-pool:manor)
+  =/  old  (~(get by releases.full) who)
+  ?~  old  `full
+  :_  full(releases (~(del by releases.full) who))
+  ~[[%pass (release-wire who claim-at.u.old) %arvo %b %rest deadline.u.old]]
+::
+++  queue-release
+  |=  [who=ship at=@da]
+  ^-  (quip card managed-pool:manor)
+  =^  cards  full  (clear-release who)
+  =/  deadline  (add now.bowl ~m1)
+  :_  full(releases (~(put by releases.full) who [at deadline]))
+  (snoc cards [%pass (release-wire who at) %arvo %b %wait deadline])
+::
+++  try-release
+  |=  who=ship
+  ^-  (quip card managed-pool:manor)
+  =/  work  (~(get by releases.full) who)
+  ?~  work  `full
+  =/  c  (~(get by claims.full) who)
+  =/  row  (~(get by ships.full) who)
+  ?~  c  (clear-release who)
+  ?~  row  (clear-release who)
+  ?.  =(claim-at.u.work at.u.c)  (clear-release who)
+  ?.  &(online.u.row =(~ pending.u.row))  `full
+  ?~  status.u.row  `full
+  ?:  busy.u.status.u.row  `full
   (unlock who)
+::
+++  retry-release
+  |=  [who=ship at=@da]
+  ^-  (quip card managed-pool:manor)
+  =/  work  (~(get by releases.full) who)
+  ?~  work  `full
+  ?.  &(=(at claim-at.u.work) (gte now.bowl deadline.u.work))  `full
+  =^  cards  full  (queue-release who at)
+  =^  more  full  (try-release who)
+  [(weld cards more) full]
 ::
 ::  Restarting the controller makes interrupted work indeterminate. Keep
 ::  its claims and quarantine the ship until a confirmed unlock.
@@ -420,7 +580,10 @@
     (weld (cleanup rid req) ?~(eyre.req ~ (answer u.eyre.req 502 'The controller restarted. Unlock this ship before retrying.')))
   =/  rows  ~(tap by ships.full)
   |-  ^-  (quip card managed-pool:manor)
-  ?~  rows  [cards out]
+  ?~  rows
+    =.  full  out
+    =^  more  full  resume-visits
+    [(weld cards more) full]
   =/  [who=ship row=managed-ship:manor]  i.rows
   ::  State %2 used an unversioned status wire. Retire that subscription
   ::  before replacing it, so migrations do not keep duplicate watches.
@@ -428,9 +591,40 @@
   =?  cards  (~(has by wex.bowl) [legacy-wire who %manor-moon])
     (snoc cards [%pass legacy-wire %agent [who %manor-moon] %leave ~])
   =?  row  ?=(^ pending.row)
+    =/  req  (~(get by requests.full) u.pending.row)
+    ?:  ?~(req | =(%profile op.u.req))
+      =/  status  status.row
+      =?  status  ?=(^ status)  `u.status(busy |)
+      row(status status)
     row(blocked &, fault `'Controller restarted during a request.')
   =.  row  row(online |, pending ~)
   $(rows t.rows, cards (weld cards (weld (refresh-watch who) (apps-watch who &))), out out(ships (~(put by ships.out) who row)))
+::
+++  resume-visits
+  ^-  (quip card managed-pool:manor)
+  =/  waiting  ~(tap by visits.full)
+  =/  cards=(list card)  ~
+  |-
+  ?^  waiting
+    =^  more  full  (await-first-tab p.i.waiting)
+    $(waiting t.waiting, cards (weld cards more))
+  =/  todo  ~(tap by pulses.full)
+  |-
+  ?^  todo
+    =/  who  p.i.todo
+    =/  v  (~(get by visits.full) who)
+    ?~  v
+      $(todo t.todo, full full(pulses (~(del by pulses.full) who)))
+    =/  grace  (add now.bowl ~s90)
+    =/  tabs=(map @ta @da)
+      (~(run by tabs.q.i.todo) |=(at=@da ?:((lth at grace) grace at)))
+    =^  more  full  (set-pulses who tabs)
+    $(todo t.todo, cards (weld cards more))
+  =/  pending  ~(tap by releases.full)
+  |-
+  ?~  pending  [cards full]
+  =^  more  full  (queue-release p.i.pending claim-at.q.i.pending)
+  $(pending t.pending, cards (weld cards more))
 ::
 ++  begin
   |=  [who=ship request=$@(?(%session %revoke) [%profile name=(unit (unit @t)) avatar=(unit (unit @t))]) eyre=(unit @ta) claim-at=@da]
@@ -441,7 +635,10 @@
   |=  [who=ship request=$@(?(%session %revoke) [%profile name=(unit (unit @t)) avatar=(unit (unit @t))]) eyre=(unit @ta) claim-at=@da secure=?]
   ^-  (quip card managed-pool:manor)
   =/  row  (~(got by ships.full) who)
-  ?>  =(~ pending.row)
+  =/  profiling=?  ?=(^ request)
+  ?>  ?:(profiling !(profile-busy who) =(~ pending.row))
+  =/  blocking=?  |(!profiling =(%manor-moon transport.row))
+  ?>  ?:(blocking =(~ pending.row) &)
   =/  serial  +(serial.full)
   =/  rid=@ta  (crip "manor-{(a-co:co serial)}")
   =/  deadline  (add now.bowl ~s45)
@@ -453,7 +650,7 @@
     [%revoke rid]
   :_  %=  full
         serial    serial
-        ships     (~(put by ships.full) who row(pending `rid, fault ~))
+        ships     ?:(blocking (~(put by ships.full) who row(pending `rid, fault ~)) ships.full)
         requests  (~(put by requests.full) rid req)
       ==
   :~  [%pass /full-result/[rid] %agent [who transport.row] %watch /result/[rid]]
@@ -468,6 +665,24 @@
   :*  %pass  wire  %agent  [who transport.row]
       %poke  ?:(=(%manor transport.row) %manor-ship-action %manor-moon-action)  !>(action)
   ==
+::
+++  record-status
+  |=  [who=ship status=status:manor-ship]
+  ^-  managed-pool:manor
+  =/  row  (~(got by ships.full) who)
+  =/  own-port  .^([@ud (unit @ud)] %e /(scot %p our.bowl)/ports/(scot %da now.bowl))
+  =/  dst  (destination row(port port.status))
+  =/  port-ok=?
+    ?~  dst  |
+    ?&  (gte port.status 1)
+        (lte port.status 65.535)
+        |(?=(^ endpoint.row) =(0 port.row) =(port.row port.status))
+        (safe-target u.dst -.own-port)
+        %+  levy  ~(tap by ships.full)
+        |=([s=ship m=managed-ship:manor] |(=(s who) !(same-target u.dst (destination m))))
+    ==
+  =/  ok  &(=(who who.status) =(`our.bowl controller.status) port-ok)
+  full(ships (~(put by ships.full) who row(online ok, status `status, port ?:(ok port.status port.row))))
 ::
 ++  receive
   |=  [=wire =sign:agent:gall]
@@ -499,19 +714,8 @@
     ?.  =(i.t.t.wire transport.row)  `full
     ?:  ?=(%fact -.sign)
       =/  status  ;;(status:manor-ship q.q.cage.sign)
-      =/  own-port  .^([@ud (unit @ud)] %e /(scot %p our.bowl)/ports/(scot %da now.bowl))
-      =/  dst  (destination row(port port.status))
-      =/  port-ok=?
-        ?~  dst  |
-        ?&  (gte port.status 1)
-            (lte port.status 65.535)
-            |(?=(^ endpoint.row) =(0 port.row) =(port.row port.status))
-            (safe-target u.dst -.own-port)
-            %+  levy  ~(tap by ships.full)
-            |=([s=ship m=managed-ship:manor] |(=(s who) !(same-target u.dst (destination m))))
-        ==
-      =/  ok  &(=(who who.status) =(`our.bowl controller.status) port-ok)
-      `full(ships (~(put by ships.full) who row(online ok, status `status, port ?:(ok port.status port.row))))
+      =.  full  (record-status who status)
+      (try-release who)
     ?:  |(?=(%kick -.sign) &(?=(%watch-ack -.sign) ?=(^ p.sign)))
       `full(ships (~(put by ships.full) who row(online |)))
     `full
@@ -536,7 +740,7 @@
   =/  req  (~(get by requests.full) rid)
   ?~  req  `full
   ?:  (lth now.bowl deadline.u.req)  `full
-  (failed rid 'Request timed out. Unlock again before reusing this ship.')
+  (failed rid ?:(=(%profile op.u.req) 'The profile update timed out. Try saving it again.' 'Request timed out. Unlock again before reusing this ship.'))
 ::
 ++  cleanup
   |=  [rid=@ta req=managed-request:manor]
@@ -551,9 +755,13 @@
   ^-  (quip card managed-pool:manor)
   =/  req  (~(got by requests.full) rid)
   =/  row  (~(got by ships.full) who.req)
+  =/  next
+    ?:  =(%profile op.req)
+      row(pending ?:(=(`rid pending.row) ~ pending.row), fault ?~(fault.row `reason fault.row))
+    row(pending ~, blocked &, fault `reason)
   :_  %=  full
         requests  (~(del by requests.full) rid)
-        ships     (~(put by ships.full) who.req row(pending ~, blocked ?:(=(%profile op.req) blocked.row &), fault `reason))
+        ships     (~(put by ships.full) who.req next)
       ==
   (weld (cleanup rid req) ?~(eyre.req ~ (answer u.eyre.req 502 'The ship could not complete login. Ask the operator to unlock it.')))
 ::
@@ -561,26 +769,37 @@
   |=  [rid=@ta result=result:manor-ship]
   ^-  (quip card managed-pool:manor)
   =/  req  (~(got by requests.full) rid)
-  ?:  ?=(%error -.result)  (failed rid 'The companion reported a failure. Unlock before reuse.')
+  ?:  ?=(%error -.result)
+    (failed rid ?:(=(%profile op.req) 'The ship could not save the profile. Try saving it again.' 'The companion reported a failure. Unlock before reuse.'))
   ?:  =(%profile op.req)
-    ?.  ?=(%profile -.result)  (failed rid 'Expected a profile confirmation.')
+    ?.  ?=(?(%profile %profile-status) -.result)  (failed rid 'Expected a profile confirmation.')
+    =/  cards  (cleanup rid req)
+    ?:  ?=(%profile-status -.result)
+      =.  full  (record-status who.req snapshot.result)
+      =/  row  (~(got by ships.full) who.req)
+      =?  row  &(!blocked.row =(~ pending.row))  row(fault ~)
+      [cards full(requests (~(del by requests.full) rid), ships (~(put by ships.full) who.req row))]
     =/  row  (~(got by ships.full) who.req)
     =/  status  status.row
     =?  status  ?=(^ status)  `u.status(profile profile.result)
+    =/  completed-legacy=?  &(=(%manor-moon transport.row) =(`rid pending.row))
+    =?  status  &(completed-legacy ?=(^ status))  `u.status(busy |)
+    =?  row  &(!blocked.row |(completed-legacy =(~ pending.row)))  row(fault ~)
     :_  %=  full
           requests  (~(del by requests.full) rid)
-          ships     (~(put by ships.full) who.req row(pending ~, fault ~, status status))
+          ships     (~(put by ships.full) who.req row(pending ?:(completed-legacy ~ pending.row), status status))
         ==
-    (cleanup rid req)
+    (snoc cards (command who.req /full-profile-report/(scot %p who.req) [%report ~]))
   ?:  =(%revoke op.req)
     ?.  ?=(%revoked -.result)  (failed rid 'Expected a revocation confirmation.')
     =/  row  (~(got by ships.full) who.req)
+    =^  more  full  (clear-release who.req)
     :_  %=  full
           requests  (~(del by requests.full) rid)
           claims    (~(del by claims.full) who.req)
           ships     (~(put by ships.full) who.req row(pending ~, blocked |, fault ~))
         ==
-    (cleanup rid req)
+    (weld more (cleanup rid req))
   ?.  ?=(%session -.result)  (failed rid 'Expected a visitor session.')
   =/  row  (~(got by ships.full) who.req)
   =/  c  (~(get by claims.full) who.req)
@@ -595,13 +814,16 @@
   =/  landing=@t  (rap 3 ~['/apps/' landing.status '/'])
   =/  key=@t  (scot %uv (sham eny.bowl [%manor-visit who.req claim-at.req rid serial.full]))
   =/  visitor=visitor:manor  [claim-at.req (sham key) ~ ~ ~ 0 ~ ~ 0 ~]
-  :_  %=  full
+  =.  full
+      %=  full
         requests  (~(del by requests.full) rid)
         claims    (~(put by claims.full) who.req u.c(entered `now.bowl))
         ships     (~(put by ships.full) who.req row(pending ~))
         visits    (~(put by visits.full) who.req visitor)
       ==
-  %+  weld  (cleanup rid req)
+  =^  waiting  full  (await-first-tab who.req)
+  :_  full
+  %+  weld  (weld (cleanup rid req) waiting)
   %+  give-simple-payload:app:server  u.eyre.req
   [[303 ['set-cookie' (rap 3 ~[cookie.result '; Path=/; Max-Age=2592000; HttpOnly; SameSite=Lax' ?:(secure.req '; Secure' '')])] ['set-cookie' (rap 3 ~['manor-visit=' key '; Path=/; Max-Age=2592000; HttpOnly; SameSite=Lax' ?:(secure.req '; Secure' '')])] ['set-cookie' (rap 3 ~['manor-visit-id=' (scot %uv proof.visitor) '; Path=/; Max-Age=2592000; SameSite=Lax' ?:(secure.req '; Secure' '')])] ['location' landing] ['cache-control' 'no-store'] ~] ~]
 ::
@@ -738,6 +960,7 @@
       [%online b+online.row]
       [%ready b+(available row)]
       [%pending ?~(pending.row ~ s+op:(~(got by requests.full) u.pending.row))]
+      ['profilePending' b+(profile-busy who)]
       [%blocked b+blocked.row]
       [%fault ?~(fault.row ~ s+u.fault.row)]
       ['autoUnlockAt' ?~(visit ~ ?~(deadline.u.visit ~ (ms u.deadline.u.visit)))]

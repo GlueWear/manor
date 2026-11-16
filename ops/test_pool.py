@@ -22,7 +22,7 @@ class PoolSourceTests(unittest.TestCase):
         code = check_pool.source(self.root, agent=True)
         for name in ("server", "manor-pool", "control", "default-agent", "dbug", "ctor"):
             self.assertIn("=/  " + name + "\n", code)
-        self.assertIn("%1  [%8 pool.got fleet.got claims.got", code)
+        self.assertIn("%1  [%9 pool.got fleet.got claims.got", code)
 
     def test_pool_has_no_snapshot_or_key_rotation_calls(self):
         helper = (self.root / "desk/lib/manor-full.hoon").read_text()

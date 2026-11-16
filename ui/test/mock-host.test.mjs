@@ -12,7 +12,7 @@ test('mock host implements the unified Manor JSON contract', async t => {
   async function profileResult() {
     for (let i = 0; i < 100; i++) {
       const row = (await state()).managed.ships[0];
-      if (!row.pending) return row;
+      if (!row.profilePending) return row;
       await new Promise(resolve => setTimeout(resolve, 25));
     }
     assert.fail('Profile confirmation did not arrive');
@@ -41,7 +41,8 @@ test('mock host implements the unified Manor JSON contract', async t => {
   assert.equal(current.controlled.landing, 'landscape');
   assert.deepEqual(current.controlled.required, ['landscape']);
   assert.equal((await poke({'ship-profile': {who: ship, name: 'Zod', avatar: 'https://example.com/a.png'}})).ok, 'ok');
-  assert.equal((await state()).managed.ships[0].pending, 'profile');
+  assert.equal((await state()).managed.ships[0].pending, null);
+  assert.equal((await state()).managed.ships[0].profilePending, true);
   assert.equal((await state()).managed.ships[0].profile.displayName, 'Pilot');
   await profileResult();
   assert.equal((await poke({'ship-profile': {who: ship, name: null}})).ok, 'ok');

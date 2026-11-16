@@ -17,7 +17,7 @@
     -:!<(response-header:http +.+.+.+.c)
   $(cards t.cards)
 =/  saved
-  $:  %8
+  $:  %9
       pool=(map ship path)
       fleet=(unit [name=@tas snapshot=path])
       claims=(map ship claim:manor)
@@ -243,4 +243,31 @@
 ?>  =(~ (mole |.((on-poke.upgraded %manor-action !>(`action:manor`[%idle-policy 1])))))
 =/  enabled  +:(on-poke.upgraded %manor-action !>(`action:manor`[%idle-policy 15]))
 ?>  =(15 idle-minutes.full:!<(saved on-save.enabled))
+~|  %state-eight-migration-preserves-visits-and-idle-policy
+=/  current  !<(saved on-save.enabled)
+=/  full-8=managed-pool-8:manor
+  [ships.full.current claims.full.current requests.full.current serial.full.current apps.full.current visits.full.current idle-minutes.full.current]
+=/  old  !>([%8 pool.current fleet.current claims.current settings.current log.current front.current full-8 controlled.current pair-requests.current visitor-pool.current])
+=/  migrated  +:(on-load.enabled old)
+=/  current  !<(saved on-save.migrated)
+?>  =(15 idle-minutes.full.current)
+?>  =(visits.full-8 visits.full.current)
+?>  =(claims.full-8 claims.full.current)
+?>  =(~ pulses.full.current)
+?>  =(~ releases.full.current)
+~|  %state-eight-unregistered-login-gets-fresh-entry-grace-on-upgrade
+=/  orphan=visitor:manor  [now.b (sham 'orphan-fixture') ~ ~ ~ 0 ~ ~ 0 ~]
+=/  abandoned  full-8(visits (~(put by visits.full-8) ~nolset orphan), claims (~(put by claims.full-8) ~nolset held-claim))
+=/  old  !>([%8 pool.current fleet.current claims.current settings.current log.current front.current abandoned controlled.current pair-requests.current visitor-pool.current])
+=/  recovered  +:(on-load.enabled old)
+=/  recovered-state  !<(saved on-save.recovered)
+=/  waiting  (~(got by visits.full.recovered-state) ~nolset)
+?>  =(`(add now.b ~m4) deadline.waiting)
+?>  =(~ idle-at.waiting)
+?>  =(held-claim (~(got by claims.full.recovered-state) ~nolset))
+?>  =(~ releases.full.recovered-state)
+~|  %reloading-again-does-not-postpone-the-entry-deadline
+=/  again  +:(on-load.recovered on-save.recovered)
+=/  again-state  !<(saved on-save.again)
+?>  =(waiting (~(got by visits.full.again-state) ~nolset))
 0

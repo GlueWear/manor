@@ -88,3 +88,67 @@ test('new app tabs register independently and revoked visits never load the app'
   await expect(page.locator('main')).toContainText('Your visit has ended');
   await expect(page.locator('iframe')).toHaveCount(0);
 });
+
+test('one-minute connection heartbeats never renew the idle deadline', async ({context, page}) => {
+  const state = await setup(context);
+  state.now = 1000;
+  state.configure(7);
+  const deadline = state.expiresAt;
+  await page.clock.install({time: new Date(1000)});
+  await page.clock.pauseAt(new Date(1000));
+  await page.goto(`${state.origin}/apps/glurff/`);
+  await expect(page.frameLocator('iframe').getByRole('heading')).toBeVisible();
+  const initialDeadline = state.expiresAt;
+  state.now += 61000;
+  await page.clock.runFor(61000);
+  await expect.poll(() => state.heartbeats.length).toBe(1);
+  expect(state.opened).toHaveLength(1);
+  expect(state.activity).toHaveLength(0);
+  expect(state.expiresAt).toBe(initialDeadline);
+  expect(initialDeadline).toBe(deadline);
+  expect(state.reads).toBe(0);
+  await page.close({runBeforeUnload: true});
+  await expect.poll(() => state.closed).toEqual(state.opened);
+});
+
+test('a refused heartbeat ends the visit instead of silently re-enrolling it', async ({context, page}) => {
+  const state = await setup(context);
+  await page.clock.install({time: new Date(1000)});
+  await page.clock.pauseAt(new Date(1000));
+  await page.goto(`${state.origin}/apps/glurff/`);
+  await expect(page.frameLocator('iframe').getByRole('heading')).toBeVisible();
+  state.refused = true;
+  await page.clock.runFor(61000);
+  await expect(page.locator('main')).toContainText('Your visit has ended');
+  await expect(page.locator('iframe')).toHaveCount(0);
+  await page.clock.runFor(120000);
+  expect(state.opened).toHaveLength(1);
+});
+
+test('connection heartbeats wait for the initial tab registration', async ({context, page}) => {
+  const state = await setup(context);
+  let release;
+  const registration = new Promise(resolve => {release = resolve;});
+  await page.route('**/~manor/visit/open', async route => {
+    await registration;
+    await route.continue();
+  });
+  const opening = page.waitForRequest(request => request.url().endsWith('/~manor/visit/open'));
+  await page.goto(`${state.origin}/apps/glurff/`);
+  await opening;
+  const heartbeats = await page.evaluate(() => {
+    let sent = 0;
+    const original = window.fetch;
+    window.fetch = (url, options) => {
+      if (options?.headers?.['x-manor-heartbeat']) sent++;
+      return original(url, options);
+    };
+    dispatchEvent(new Event('online'));
+    document.dispatchEvent(new Event('visibilitychange'));
+    return sent;
+  });
+  expect(heartbeats).toBe(0);
+  release();
+  await expect(page.frameLocator('iframe').getByRole('heading')).toBeVisible();
+  expect(state.opened).toHaveLength(1);
+});
